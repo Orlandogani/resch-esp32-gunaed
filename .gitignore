@@ -1,0 +1,29 @@
+# ESP-IDF build output
+build/
+managed_components/
+dependencies.lock
+
+# sdkconfig — ignore local/backup variants, keep the checked-in defaults
+sdkconfig.old
+sdkconfig.bak
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# IDE
+.vscode/
+.vs/
+.idea/
+*.code-workspace
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Claude Code local project state
+.claude/settings.local.json
+
+# Third-party
+.claude/
