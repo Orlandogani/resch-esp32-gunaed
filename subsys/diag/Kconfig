@@ -1,0 +1,23 @@
+menu "Diagnostics (subsys/diag)"
+
+    config DIAG_MAX_WDT_TASKS
+        int "Maximum tasks subscribed to the task watchdog through diag"
+        default 8
+        range 1 32
+        help
+            Size of the static table that records which tasks diag_task_register()
+            subscribed, so diag_deinit() can unsubscribe exactly those. Deadline
+            tasks (audio capture, USB device) are the intended subscribers.
+
+    config DIAG_WDT_TIMEOUT_S
+        int "Task watchdog timeout used when diag initialises the WDT itself (s)"
+        default 5
+        range 1 60
+        depends on ESP_TASK_WDT_EN && !ESP_TASK_WDT_INIT
+        help
+            When the system does not initialise the task watchdog at boot
+            (ESP_TASK_WDT_INIT off), diag_task_register() initialises it on first use
+            with this timeout. When ESP_TASK_WDT_INIT is on, the system's
+            ESP_TASK_WDT_TIMEOUT_S applies and this symbol is hidden.
+
+endmenu

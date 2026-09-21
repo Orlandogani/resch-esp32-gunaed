@@ -1,0 +1,64 @@
+menu "Power (subsys/power)"
+
+    config POWER_ENABLE_DFS
+        bool "Enable dynamic frequency scaling on power_init()"
+        depends on PM_ENABLE
+        default y
+        help
+            Calls esp_pm_configure() during power_init() so the CPU can scale
+            between POWER_MIN_FREQ_MHZ and POWER_MAX_FREQ_MHZ. Requires
+            "Component config > Power Management > Support for power management"
+            (PM_ENABLE). When PM_ENABLE is off this symbol does not exist and the
+            entire DFS path compiles out (FW-PWR-002).
+
+    config POWER_MAX_FREQ_MHZ
+        int "Max CPU frequency (MHz) for DFS"
+        depends on POWER_ENABLE_DFS
+        default 240
+        range 80 240
+        help
+            Upper DFS bound. 240 is the ESP32-S3 maximum. Lowering it caps peak
+            throughput and peak current.
+
+    config POWER_MIN_FREQ_MHZ
+        int "Min CPU frequency (MHz) for DFS"
+        depends on POWER_ENABLE_DFS
+        default 80
+        range 10 240
+        help
+            Lower DFS bound. Lowering it saves idle power but lengthens wake-from-idle
+            latency, and a peripheral clocked from a scaled source may misbehave
+            (SYS-PWR-007). 80 MHz keeps the APB clock at its nominal 80 MHz on the
+            ESP32-S3; values below that scale APB too.
+
+    config POWER_LIGHT_SLEEP_AUTO
+        bool "Let esp_pm enter light sleep automatically when idle"
+        depends on POWER_ENABLE_DFS && FREERTOS_USE_TICKLESS_IDLE
+        default n
+        help
+            Sets light_sleep_enable in the esp_pm configuration. Requires tickless
+            idle. Off by default because automatic light sleep interacts with USB
+            and I2S; enable it deliberately after measuring (SYS-PWR-009).
+
+    config POWER_LIGHT_SLEEP_ALLOW_WITH_USJ
+        bool "Allow light sleep while a USB-Serial/JTAG host is connected"
+        depends on SOC_USB_SERIAL_JTAG_SUPPORTED
+        default n
+        help
+            On the ESP32-S3 the USB-Serial/JTAG link cannot survive light sleep: the
+            pad is disabled on entry and the host never re-enumerates afterwards, so a
+            board whose only console is USJ becomes unreachable until re-plugged.
+            While this is off, power_enter_light_sleep() returns ESP_ERR_NOT_ALLOWED
+            whenever usb_serial_jtag_is_connected() is true. Turn it on only for
+            production builds that do not rely on the USJ console.
+
+    config POWER_RETAINED_PAYLOAD_BYTES
+        int "Bytes of application state retained across deep sleep"
+        default 256
+        range 16 4096
+        help
+            Size of the payload in the CRC-protected RTC slow memory block managed by
+            power_retained_read()/write(). RTC slow memory is 8 KiB on the ESP32-S3
+            and ESP-IDF reserves part of it; keep this well under 4 KiB.
+
+endmenu

@@ -1,0 +1,107 @@
+# ESP32-S3 Platform SDK — reference application configuration baseline.
+#
+# This file is the version-controlled source of truth for configuration (ADR-012,
+# SYS-BLD-002). The generated `sdkconfig` is a build artefact and is git-ignored.
+# To apply a change made here: delete `sdkconfig` and rebuild, or run
+# `idf.py reconfigure` after `idf.py fullclean`.
+#
+# Every non-default value below carries the requirement or ADR that motivates it.
+# A value with no justification is a defect in this file.
+
+# ---------------------------------------------------------------------------
+# Target and toolchain (CON-01, CON-06)
+# ---------------------------------------------------------------------------
+CONFIG_IDF_TARGET="esp32s3"
+
+# ---------------------------------------------------------------------------
+# Flash: 16 MiB, custom dual-slot partition table (ADR-008, SYS-OTA-009, TBD-001 closed)
+# ---------------------------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+# ---------------------------------------------------------------------------
+# Bootloader: rollback on unconfirmed image (SYS-OTA-005, FW-OTA-006)
+# ---------------------------------------------------------------------------
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# ---------------------------------------------------------------------------
+# PSRAM: 8 MiB octal (ADR-014 — never on the hot path; caps-alloc only so plain
+# malloc() stays internal). IGNORE_NOTFOUND keeps a board without PSRAM booting.
+# ---------------------------------------------------------------------------
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# ---------------------------------------------------------------------------
+# Power management (SYS-PWR-005, FW-PWR-001, SFRS §3.3 finding)
+# ---------------------------------------------------------------------------
+CONFIG_PM_ENABLE=y
+CONFIG_POWER_ENABLE_DFS=y
+CONFIG_POWER_MAX_FREQ_MHZ=240
+CONFIG_POWER_MIN_FREQ_MHZ=80
+
+# ---------------------------------------------------------------------------
+# FreeRTOS: 1 kHz tick (ADR-010). Deadline paths still never use the tick (TM1).
+# ---------------------------------------------------------------------------
+CONFIG_FREERTOS_HZ=1000
+
+# ---------------------------------------------------------------------------
+# Supervision: task WDT on both idle tasks, stack canaries during development
+# (SYS-DIAG-003, SDD §12.4 finding)
+# ---------------------------------------------------------------------------
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
+
+# ---------------------------------------------------------------------------
+# Crash capture to the coredump partition (SYS-DIAG-004, FW-DIAG-004)
+# ---------------------------------------------------------------------------
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# ---------------------------------------------------------------------------
+# Logging: INFO by default, DEBUG compiled in so it can be raised at runtime
+# without reflashing (SYS-DIAG-002, FW-DIAG-007)
+# ---------------------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+CONFIG_LOG_DYNAMIC_LEVEL_CONTROL=y
+
+# ---------------------------------------------------------------------------
+# Bluetooth: Bluedroid, BLE only (ADR-018 supersedes ADR-015; CON-04)
+# ---------------------------------------------------------------------------
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_CLASSIC_ENABLED=n
+CONFIG_BT_GATTS_ENABLE=y
+CONFIG_BT_SMP_ENABLE=y
+CONFIG_BT_BLE_SMP_BOND_NVS_FLASH=y
+CONFIG_BT_BLUEDROID_PINNED_TO_CORE_0=y
+# Legacy advertising API set: reachable by every central. Bluedroid cannot enable
+# both 4.2 and 5.0 API sets at once (ADR-018).
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_42_ADV_EN=y
+
+# ---------------------------------------------------------------------------
+# Wi-Fi (subsys/wifi_link) and TLS trust for OTA (SYS-SEC-003, DES-OTA-005)
+# ---------------------------------------------------------------------------
+CONFIG_ESP_WIFI_ENABLED=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+# CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP is deliberately NOT set (ADR-016 release gate)
+
+# ---------------------------------------------------------------------------
+# USB device stack (ADR-017: vendored esp_tinyusb with audio class enabled)
+# ---------------------------------------------------------------------------
+CONFIG_TINYUSB_HID_COUNT=1
+CONFIG_TINYUSB_AUDIO_ENABLED=y
+CONFIG_TINYUSB_PM=y

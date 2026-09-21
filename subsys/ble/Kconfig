@@ -1,0 +1,36 @@
+menu "BLE (subsys/ble)"
+
+    config BLE_DEVICE_NAME
+        string "Default advertised device name"
+        default "esp32s3-sdk"
+        help
+            Used when ble_config_t.device_name is NULL. At most 29 bytes so that the
+            complete name and the flags fit one 31-byte advertising PDU.
+
+    config BLE_ADV_INTERVAL_MS
+        int "Default minimum advertising interval (ms)"
+        default 100
+        range 20 10240
+        help
+            Longer intervals save power and lengthen discovery (SYS-SYS-018). The
+            maximum defaults to 125 % of this value.
+
+    config BLE_MAX_SERVICES
+        int "Maximum GATT services an application may register"
+        default 4
+        range 1 8
+
+    config BLE_LOCAL_MTU
+        int "Local ATT MTU offered to the central"
+        default 247
+        range 23 517
+        help
+            The negotiated MTU is the smaller of this and the central's. 247 is
+            the common phone maximum; notifications carry MTU - 3 bytes.
+
+    config BLE_START_TIMEOUT_MS
+        int "Timeout for each step of the asynchronous start sequence (ms)"
+        default 2000
+        range 500 10000
+
+endmenu

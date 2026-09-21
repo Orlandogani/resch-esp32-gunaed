@@ -1,0 +1,6 @@
+# diag tests exercise the task watchdog, so it must be compiled in but not
+# system-initialised (diag_task_register() initialises it on demand).
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=n
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y

@@ -1,0 +1,21 @@
+menu "Config storage (subsys/cfg)"
+
+    config CFG_MAX_HANDLES
+        int "Maximum simultaneously open namespaces"
+        default 8
+        range 1 32
+        help
+            Size of the static handle table behind cfg_open(). One per subsystem that
+            keeps a namespace open is typical. Exhaustion returns ESP_ERR_NO_MEM at
+            open time (ADR-005).
+
+    config CFG_MAX_BLOB_BYTES
+        int "Maximum payload of a versioned blob (bytes)"
+        default 1024
+        range 16 4000
+        help
+            Upper bound for cfg_set_blob(). Sizes a static scratch buffer of this many
+            bytes plus an 8-byte header. NVS itself limits a single blob to just under
+            4000 bytes on a default page size.
+
+endmenu

@@ -1,0 +1,11 @@
+menu "Wi-Fi link (subsys/wifi_link)"
+
+    config WIFI_LINK_POWER_SAVE_MIN_MODEM
+        bool "Enable modem power save (WIFI_PS_MIN_MODEM)"
+        default y
+        help
+            Lets the Wi-Fi modem sleep between DTIM beacons while connected.
+            Reduces idle current substantially; adds latency to inbound traffic.
+            Turn off for latency-sensitive network use.
+
+endmenu

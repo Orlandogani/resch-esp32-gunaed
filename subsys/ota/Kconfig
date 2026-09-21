@@ -1,0 +1,44 @@
+menu "OTA update (subsys/ota)"
+
+    config OTA_TASK_PRIORITY
+        int "OTA worker task priority"
+        default 5
+        range 1 15
+        help
+            Well below USB (18) and audio (20): a multi-megabyte download must never
+            starve a deadline task (FW-OTA-010).
+
+    config OTA_TASK_CORE
+        int "OTA worker task core affinity"
+        default 0
+        range 0 1
+        help
+            Core 0, alongside the network stacks it talks to (ADR-009).
+
+    config OTA_TASK_STACK
+        int "OTA worker task stack (bytes)"
+        default 8192
+        range 6144 16384
+        help
+            TLS handshakes need depth. Reducing below 8 KiB risks overflow during
+            certificate verification.
+
+    config OTA_HTTP_TIMEOUT_MS
+        int "HTTP request timeout (ms)"
+        default 10000
+        range 1000 120000
+
+    config OTA_RECV_BUFFER_SIZE
+        int "HTTP receive buffer (bytes)"
+        default 4096
+        range 1024 16384
+        help
+            Download chunk size; trades RAM against flash-write efficiency. 4096
+            matches the flash sector.
+
+    config OTA_PROGRESS_INTERVAL_BYTES
+        int "Emit OTA_EVT_PROGRESS every N bytes"
+        default 65536
+        range 4096 1048576
+
+endmenu

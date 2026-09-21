@@ -3,7 +3,8 @@ build/
 managed_components/
 dependencies.lock
 
-# sdkconfig — ignore local/backup variants, keep the checked-in defaults
+# Generated configuration — sdkconfig.defaults* is the source of truth (ADR-012)
+sdkconfig
 sdkconfig.old
 sdkconfig.bak
 

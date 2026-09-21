@@ -1,0 +1,30 @@
+menu "USB HID (subsys/usb_hid)"
+
+    config USB_HID_REPORT_QUEUE_LEN
+        int "Input report queue depth"
+        default 8
+        range 1 64
+        help
+            Reports buffered ahead of the interrupt IN endpoint. Raising it absorbs
+            more producer jitter at the cost of latency and 66 bytes of RAM per slot.
+            A full queue makes usb_hid_report_send() return ESP_ERR_NO_MEM.
+
+    config USB_HID_EP_SIZE
+        int "Default interrupt IN endpoint size (bytes)"
+        default 64
+        range 1 64
+        help
+            wMaxPacketSize when usb_hid_config_t.ep_size is 0. 64 is the full-speed
+            interrupt maximum and also the largest report that can be sent.
+
+    config USB_HID_POLL_INTERVAL_MS
+        int "Default bInterval (ms)"
+        default 1
+        range 1 255
+        help
+            Host polling interval when usb_hid_config_t.poll_interval_ms is 0. On
+            full-speed USB one frame is 1 ms, so 1 is the hardware floor (CON-02,
+            SYS-HID-001). Larger values reduce bus load and host CPU at the cost of
+            report latency.
+
+endmenu

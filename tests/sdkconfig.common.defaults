@@ -1,0 +1,7 @@
+# Shared baseline for every on-target test project. Each project's own
+# sdkconfig.defaults is applied after this one and may override it.
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_TASK_WDT_EN=n
+CONFIG_UNITY_ENABLE_IDF_TEST_RUNNER=y

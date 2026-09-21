@@ -1,0 +1,47 @@
+menu "Audio capture (drivers/audio_capture)"
+
+    config AUDIO_CAPTURE_DMA_FRAME_MS
+        int "Default milliseconds of audio per DMA descriptor"
+        default 2
+        range 1 20
+        help
+            Lower means lower capture latency and more interrupts. One descriptor
+            must stay under 4092 bytes: at 48 kHz stereo 32-bit that is 10 ms.
+
+    config AUDIO_CAPTURE_DMA_FRAME_COUNT
+        int "Default DMA descriptor count"
+        default 4
+        range 2 16
+        help
+            Total DMA buffering is FRAME_MS x FRAME_COUNT. Two is the minimum for
+            double-buffering (FW-AUD-002); four tolerates a late task wake-up.
+
+    config AUDIO_CAPTURE_RING_MS
+        int "Default ring buffer depth (ms)"
+        default 40
+        range 4 1000
+        help
+            Must exceed the slowest reader's service period plus USB jitter, or
+            that reader is overrun (which it is told about, FW-AUD-006).
+
+    config AUDIO_CAPTURE_TASK_PRIORITY
+        int "Capture task priority"
+        default 20
+        range 1 24
+        help
+            Highest SDK priority: a missed DMA frame is lost irrecoverably, so
+            nothing may pre-empt the drain (SDD §8.1).
+
+    config AUDIO_CAPTURE_TASK_CORE
+        int "Capture task core affinity"
+        default 1
+        range 0 1
+        help
+            Core 1, away from the Wi-Fi/Bluetooth stacks on core 0 (ADR-009).
+
+    config AUDIO_CAPTURE_TASK_STACK
+        int "Capture task stack (bytes)"
+        default 4096
+        range 2048 16384
+
+endmenu

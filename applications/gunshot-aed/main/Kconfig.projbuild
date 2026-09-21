@@ -1,0 +1,33 @@
+menu "Application (gunshot-aed)"
+
+    config APP_ENABLE_USB
+        bool "Start the USB composite device at boot"
+        default n
+        help
+            On the ESP32-S3 the USB-OTG PHY and the built-in USB-Serial/JTAG share
+            D+/D-. Starting TinyUSB removes the USJ console until the board is
+            re-plugged. Leave this off while developing over USJ; turn it on for
+            boards with a separate UART console or for production images.
+
+    config APP_AUDIO_SAMPLE_RATE_HZ
+        int "Microphone sample rate (Hz)"
+        default 16000
+        range 8000 48000
+
+    config APP_MIC_PDM
+        bool "Microphone is PDM (else standard I2S)"
+        default y
+
+    config APP_MIC_PIN_CLK
+        int "Microphone clock pin (PDM CLK or I2S BCLK)"
+        default 4
+
+    config APP_MIC_PIN_WS
+        int "I2S WS pin (ignored for PDM)"
+        default 5
+
+    config APP_MIC_PIN_DIN
+        int "Microphone data-in pin"
+        default 6
+
+endmenu

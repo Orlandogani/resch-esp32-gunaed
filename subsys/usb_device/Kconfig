@@ -1,0 +1,72 @@
+menu "USB Device (subsys/usb_device)"
+
+    config USB_DEVICE_VID
+        hex "USB vendor ID"
+        default 0x303A
+        help
+            0x303A is Espressif's vendor ID, acceptable for development with a
+            PID from Espressif's test range. A shipping product needs its own
+            VID/PID (TBD-006, SYS-USB-007).
+
+    config USB_DEVICE_PID
+        hex "USB product ID"
+        default 0x4004
+        help
+            Product ID paired with USB_DEVICE_VID. See TBD-006.
+
+    config USB_DEVICE_MANUFACTURER
+        string "Manufacturer string"
+        default "ESP32-S3 Platform SDK"
+
+    config USB_DEVICE_PRODUCT
+        string "Product string"
+        default "Composite Audio+HID Device"
+
+    config USB_DEVICE_MAX_FUNCTIONS
+        int "Maximum registered class functions"
+        default 4
+        range 1 8
+        help
+            Static registry size. The hardware endpoint budget (4 IN endpoints)
+            is usually the binding limit before this is.
+
+    config USB_DEVICE_CONFIG_DESC_MAX_BYTES
+        int "Configuration descriptor buffer size (bytes)"
+        default 512
+        range 64 2048
+        help
+            Static buffer the composite configuration descriptor is assembled into.
+            A UAC2 microphone plus one HID interface needs roughly 200 bytes.
+
+    config USB_DEVICE_TASK_PRIORITY
+        int "USB device task priority"
+        default 18
+        range 1 24
+        help
+            Above every application task and below audio capture (20), so a USB
+            frame is never missed because an application task ran, but capture
+            still wins if both are ready (SDD §8.1).
+
+    config USB_DEVICE_TASK_CORE
+        int "USB device task core affinity"
+        default 1
+        range 0 1
+        help
+            Core 0 hosts the Wi-Fi/Bluetooth stacks by ESP-IDF default; pinning
+            USB to core 1 isolates the 1 ms frame deadline from radio activity
+            (ADR-009).
+
+    config USB_DEVICE_TASK_STACK
+        int "USB device task stack (bytes)"
+        default 4096
+        range 2048 16384
+
+    # The device core needs suspend/resume delivered as events to manage its sleep
+    # lock; those are opt-in callbacks in esp_tinyusb.
+    config USB_DEVICE_SELECTS
+        bool
+        default y
+        select TINYUSB_SUSPEND_CALLBACK
+        select TINYUSB_RESUME_CALLBACK
+
+endmenu

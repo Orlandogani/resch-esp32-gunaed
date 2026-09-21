@@ -1,0 +1,34 @@
+menu "USB Audio (subsys/usb_audio)"
+
+    config USB_AUDIO_FEED_PERIOD_US
+        int "Feeder period (us)"
+        default 1000
+        range 250 4000
+        help
+            How often the feeder task moves bytes from the ring into TinyUSB's
+            software FIFO while streaming. 1000 us matches the USB frame. Shorter
+            lowers latency at the cost of wakeups; longer relies on the FIFO
+            (CONFIG_TINYUSB_AUDIO_EP_IN_SW_BUF_MULT) to bridge the gap.
+
+    config USB_AUDIO_FEED_TASK_PRIORITY
+        int "Feeder task priority"
+        default 19
+        range 1 24
+        help
+            Between audio capture (20) and the USB device task (18): the feeder must
+            run as soon as capture publishes, but never delay capture itself.
+
+    config USB_AUDIO_FEED_TASK_CORE
+        int "Feeder task core affinity"
+        default 1
+        range 0 1
+        help
+            Same core as capture and USB so the whole audio path is isolated from
+            the radio stacks on core 0 (ADR-009).
+
+    config USB_AUDIO_FEED_TASK_STACK
+        int "Feeder task stack (bytes)"
+        default 3072
+        range 2048 8192
+
+endmenu

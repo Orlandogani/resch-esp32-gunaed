@@ -1,0 +1,15 @@
+menu "PM Policy (subsys/pm_policy)"
+
+    config PM_POLICY_MAX_LOCKS
+        int "Maximum number of named deep-sleep locks"
+        default 8
+        range 1 64
+        help
+            Size of the statically allocated lock table used by
+            pm_policy_lock_create(). No dynamic allocation is used, so this bounds
+            how many distinct subsystems can each hold a named deep-sleep lock.
+            Each entry costs 12 bytes of BSS. Exhaustion fails loudly at init time
+            with ESP_ERR_NO_MEM (FW-PMP-003) - a deterministic, immediate failure by
+            design (ADR-005).
+
+endmenu
