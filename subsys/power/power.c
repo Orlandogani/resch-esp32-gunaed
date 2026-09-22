@@ -39,7 +39,9 @@ RTC_DATA_ATTR static power_retained_t s_retained;
 /* -------------------------------------------------------------------------- */
 
 static bool s_initialised;
-static bool s_dfs_active;
+#if CONFIG_PM_ENABLE && CONFIG_POWER_ENABLE_DFS
+static bool s_dfs_active;   /* Only ever read under the same guard (FW-SYS-053). */
+#endif
 static bool s_retained_valid;
 static uint64_t s_ext1_mask;   /* Pins we enabled, so deinit can undo exactly those. */
 static bool s_timer_armed;     /* esp_sleep logs an error if we disable an unarmed timer. */

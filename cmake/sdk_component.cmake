@@ -25,5 +25,11 @@ function(sdk_component_strict)
         -Wmissing-prototypes
         -Wold-style-definition
         -Wno-unused-parameter   # Callback signatures routinely have unused params
+        # ESP-IDF's build appends -Wno-error=unused-variable and
+        # -Wno-error=unused-but-set-variable globally, after these options, which
+        # silently demotes them past -Werror. Re-promote them: an unused static in
+        # SDK code is almost always a mis-guarded #if (SYS-BLD-005).
+        -Werror=unused-variable
+        -Werror=unused-but-set-variable
     )
 endfunction()
