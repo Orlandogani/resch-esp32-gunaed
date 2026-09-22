@@ -1,0 +1,79 @@
+menu "Buttons (drivers/buttons)"
+
+    config BUTTONS_MAX
+        int "Maximum buttons per configuration"
+        default 4
+        range 1 16
+        help
+            Size of the static per-button state table (ADR-005). buttons_init()
+            rejects a configuration with more entries than this.
+
+    config BUTTONS_DEBOUNCE_MS
+        int "Default debounce time (ms)"
+        default 20
+        range 1 500
+        help
+            A level must be stable for this long before it is accepted as a press
+            or release. Mechanical switches settle in 1-20 ms; raise it for a
+            noisy switch, lower it for a tactile dome if latency matters.
+
+    config BUTTONS_LONG_PRESS_MS
+        int "Default long-press threshold (ms)"
+        default 800
+        range 100 10000
+        help
+            A press held this long emits BUTTONS_EVENT_LONG_PRESS once. The
+            application decides what a long press means (ADR-013).
+
+    config BUTTONS_REPEAT_MS
+        int "Default auto-repeat period after a long press (ms)"
+        default 200
+        range 20 5000
+        help
+            While a button stays held past the long-press threshold and the
+            configuration enables auto_repeat, BUTTONS_EVENT_REPEAT fires every
+            this many milliseconds (volume-style hold).
+
+    config BUTTONS_SAMPLE_MS
+        int "Sampling period while any button is active (ms)"
+        default 5
+        range 1 50
+        help
+            After an edge interrupt the task samples every pin at this period until
+            all buttons are released and settled, then blocks again. Sets the
+            resolution of every timing above; must be well under DEBOUNCE_MS.
+
+    config BUTTONS_IDLE_POLL_MS
+        int "Idle wake-up period (ms)"
+        default 1000
+        range 100 30000
+        help
+            While idle the task still wakes at this period to re-sample the pins
+            and feed the watchdog, so a missed edge interrupt (e.g. across a sleep
+            transition) is recovered within one period. Must be below the task
+            watchdog timeout (DIAG_WDT_TIMEOUT_S).
+
+    config BUTTONS_TASK_PRIORITY
+        int "Button task priority"
+        default 8
+        range 1 10
+        help
+            Human-timescale work: below every SDK deadline task (SDD §8.1). The
+            application's event callback runs at this priority, on this task.
+
+    config BUTTONS_TASK_CORE
+        int "Button task core affinity"
+        default 0
+        range 0 1
+        help
+            Core 0, away from the audio deadline tasks on core 1 (ADR-009).
+
+    config BUTTONS_TASK_STACK
+        int "Button task stack (bytes)"
+        default 3072
+        range 2048 16384
+        help
+            The application's callback runs on this stack; raise it if the
+            callback does more than hand the event on.
+
+endmenu

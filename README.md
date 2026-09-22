@@ -51,7 +51,7 @@ idf.py build
 idf.py -p COM4 flash monitor
 ```
 
-Projects: `tests/lib/ringbuf`, `tests/drivers/audio_capture`, `tests/subsys/{power,
+Projects: `tests/lib/ringbuf`, `tests/drivers/{audio_capture, audio_playback}`, `tests/subsys/{power,
 pm_policy, cfg, diag, usb_device, wifi_link, ota, ble}`. Tests that would sever a
 USB-Serial/JTAG console are tagged `[needs_uart_console]` / `[needs_usb_host]` and skip
 themselves or are excluded by the project's `app_main`.
