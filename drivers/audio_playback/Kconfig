@@ -1,0 +1,56 @@
+menu "Audio playback (drivers/audio_playback)"
+
+    config AUDIO_PLAYBACK_DMA_FRAME_MS
+        int "Default milliseconds of audio per DMA descriptor"
+        default 2
+        range 1 20
+        help
+            Lower means lower output latency and more interrupts. One descriptor
+            must stay under 4092 bytes, which audio_playback_init() enforces: at
+            48 kHz stereo 32-bit that is 5 ms.
+
+    config AUDIO_PLAYBACK_DMA_FRAME_COUNT
+        int "Default DMA descriptor count"
+        default 4
+        range 2 16
+        help
+            Total DMA buffering is FRAME_MS x FRAME_COUNT, and is the slack the
+            playback task has to refill after a late wake-up. Two is the minimum
+            for double-buffering (FW-AUD-032).
+
+    config AUDIO_PLAYBACK_PREFILL_MS
+        int "Default prefill depth (ms)"
+        default 10
+        range 0 500
+        help
+            Audio that must accumulate in the source ring before playback starts,
+            and again after a complete starvation. This is the hysteresis that
+            stops a source running at exactly nominal rate from clicking once per
+            DMA frame. It adds directly to output latency, so keep it near the
+            worst-case jitter of whoever writes the ring — a USB OUT stream needs
+            about one frame plus host jitter. Zero disables the hysteresis and is
+            only sensible when the writer is known to run ahead.
+
+    config AUDIO_PLAYBACK_TASK_PRIORITY
+        int "Playback task priority"
+        default 19
+        range 1 24
+        help
+            Below audio_capture (20), whose losses are irrecoverable, and above
+            every application task. A missed playback frame is an audible click,
+            not lost data, and the DMA chain covers FRAME_MS x FRAME_COUNT of
+            lateness (SDD §8.1).
+
+    config AUDIO_PLAYBACK_TASK_CORE
+        int "Playback task core affinity"
+        default 1
+        range 0 1
+        help
+            Core 1, away from the Wi-Fi/Bluetooth stacks on core 0 (ADR-009).
+
+    config AUDIO_PLAYBACK_TASK_STACK
+        int "Playback task stack (bytes)"
+        default 4096
+        range 2048 16384
+
+endmenu

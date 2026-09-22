@@ -1,0 +1,4 @@
+# The playback task registers with the diag watchdog on start, so the WDT must be
+# compiled in but not system-initialised (diag_task_register() initialises it).
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=n
