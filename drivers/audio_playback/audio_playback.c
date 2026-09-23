@@ -468,6 +468,7 @@ esp_err_t audio_playback_stats(audio_playback_stats_t *out)
     *out = s_stats;
     out->running = (s_state == ST_RUNNING);
     out->primed = s_primed;
+    out->source_backlog_bytes = (s_state != ST_UNINIT) ? (uint32_t)ringbuf_available(&s_reader) : 0;
     return ESP_OK;
 }
 

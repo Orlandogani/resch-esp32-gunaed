@@ -105,6 +105,9 @@ typedef struct {
     uint32_t write_timeouts;      /**< `i2s_channel_write()` timed out; a frame was lost. */
     uint32_t prefills;            /**< Times the driver entered the prefill state.        */
     uint32_t task_stack_free_min; /**< Words. From uxTaskGetStackHighWaterMark().         */
+    uint32_t source_backlog_bytes;/**< Bytes queued in the source ring, right now. This is
+                                       the elastic buffer's true fill level, and the only
+                                       honest input to a USB feedback servo upstream.     */
     bool     running;
     bool     primed;              /**< False while accumulating prefill.                  */
 } audio_playback_stats_t;
