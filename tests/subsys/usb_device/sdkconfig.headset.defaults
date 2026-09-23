@@ -1,0 +1,11 @@
+# Alternative defaults for the usb_device test: the UAC2 function is a duplex
+# headset (mic IN + speaker OUT + feedback IN) rather than a microphone, so the
+# hand-built duplex descriptor and the endpoint budget that goes with it are
+# exercised (ADR-021, DES-AUD-021).
+#   idf.py -B build_headset -D SDKCONFIG=sdkconfig.headset \n#          -D SDKCONFIG_DEFAULTS="../../sdkconfig.common.defaults;sdkconfig.headset.defaults" build
+# SDKCONFIG must be given too: build directories do not get their own by
+# default, so without it this variant rewrites the microphone build's config.
+CONFIG_TINYUSB_HID_COUNT=1
+CONFIG_TINYUSB_AUDIO_ENABLED=y
+CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED=y
+CONFIG_TINYUSB_PM=n

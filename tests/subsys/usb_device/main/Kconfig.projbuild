@@ -1,0 +1,16 @@
+menu "usb_device test options"
+
+    config TEST_USB_HOST_ATTACHED
+        bool "Run ONLY the bus-attaching tests"
+        default n
+        help
+            The default build runs every case that does not touch the USB bus, so
+            it is safe on a board whose only console is USB-Serial/JTAG.
+
+            With this set, app_main() runs only the [needs_usb_host] cases, which
+            call usb_device_start(). On the ESP32-S3 that switches the PHY to OTG
+            and the USJ console disappears until the board is physically replugged
+            (CON-09, TBD-009). The Unity output goes with it, so the result has to
+            be read from the host side - see the case's own comment.
+
+endmenu

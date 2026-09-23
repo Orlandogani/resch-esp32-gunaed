@@ -1,0 +1,11 @@
+# Alternative defaults for the usb_device test: the duplex-headset descriptor AND
+# the bus-attaching cases. Flashing this SEVERS a USB-Serial/JTAG console until the
+# board is physically replugged (CON-09, TBD-009). Only use it with someone at the
+# board, and read the result from the host rather than the serial console.
+#   idf.py -B build_hostattach -D SDKCONFIG=sdkconfig.hostattach \
+#          -D SDKCONFIG_DEFAULTS="../../sdkconfig.common.defaults;sdkconfig.hostattach.defaults" build
+CONFIG_TINYUSB_HID_COUNT=1
+CONFIG_TINYUSB_AUDIO_ENABLED=y
+CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED=y
+CONFIG_TINYUSB_PM=n
+CONFIG_TEST_USB_HOST_ATTACHED=y

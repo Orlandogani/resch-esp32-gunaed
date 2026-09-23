@@ -151,11 +151,16 @@ void app_main(void)
     if (usb_ok == ESP_OK) {
         usb_device_set_event_cb(on_usb_event, NULL);
         if (audio_ok == ESP_OK) {
+            /* Microphone only: this product has no speaker (SYS-AUD-009 is the
+             * headset's requirement, not this one). */
             usb_audio_config_t uac = {
-                .ring = audio_capture_get_ring(),
-                .sample_rate_hz = CONFIG_APP_AUDIO_SAMPLE_RATE_HZ,
-                .channels = 1,
-                .bits_per_sample = 16,
+                .direction = USB_AUDIO_DIR_MIC,
+                .mic = {
+                    .ring = audio_capture_get_ring(),
+                    .sample_rate_hz = CONFIG_APP_AUDIO_SAMPLE_RATE_HZ,
+                    .channels = 1,
+                    .bits_per_sample = 16,
+                },
             };
             optional(usb_audio_init(&uac), "usb_audio");
         }

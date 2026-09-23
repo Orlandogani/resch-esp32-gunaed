@@ -58,15 +58,30 @@ static void fresh(void)
 #define DT_HID       0x21
 
 typedef struct {
+    uint8_t  addr;
+    uint8_t  attr;        /* Full bmAttributes. */
+    uint16_t mps;
+    uint8_t  interval;
+} ep_info_t;
+
+typedef struct {
     uint8_t interfaces;
     uint8_t iads;
     uint8_t endpoints;
     uint8_t ep_addrs[16];
+    ep_info_t eps[16];
     uint8_t hid_ep_interval;
     uint8_t iso_ep_interval;
     uint16_t iso_ep_size;
     uint8_t hid_count;
+    uint8_t audio_itf_descs;    /* bInterfaceClass 0x01, one per alternate setting */
+    uint8_t audio_interfaces;   /* Distinct bInterfaceNumber among those           */
+    uint32_t audio_itf_mask;    /* Private to walk().                              */
 } desc_summary_t;
+
+/* UAC2 endpoint usage, bmAttributes bits 5:4 — 00 data, 01 feedback. */
+#define EP_USAGE(attr)   (((attr) >> 4) & 0x03)
+#define EP_IS_FEEDBACK(attr) (EP_USAGE(attr) == 1)
 
 static void walk(const uint8_t *d, size_t len, desc_summary_t *s)
 {
@@ -84,6 +99,16 @@ static void walk(const uint8_t *d, size_t len, desc_summary_t *s)
             if (cur_class == 0x03) {                /* HID */
                 s->hid_count++;
             }
+            if (cur_class == 0x01) {                /* AUDIO */
+                /* Alternate settings repeat the interface descriptor, so count
+                 * distinct interface numbers rather than descriptors. */
+                s->audio_itf_descs++;
+                uint8_t num = d[off + 2];           /* bInterfaceNumber */
+                if (num < 32 && !(s->audio_itf_mask & (1u << num))) {
+                    s->audio_itf_mask |= (1u << num);
+                    s->audio_interfaces++;
+                }
+            }
             break;
         case DT_IAD:
             s->iads++;
@@ -94,6 +119,10 @@ static void walk(const uint8_t *d, size_t len, desc_summary_t *s)
             uint16_t mps = (uint16_t)(d[off + 4] | (d[off + 5] << 8));
             uint8_t interval = d[off + 6];
             TEST_ASSERT_TRUE_MESSAGE(s->endpoints < 16, "too many endpoints");
+            s->eps[s->endpoints].addr = addr;
+            s->eps[s->endpoints].attr = d[off + 3];
+            s->eps[s->endpoints].mps = mps;
+            s->eps[s->endpoints].interval = interval;
             s->ep_addrs[s->endpoints++] = addr;
             if (attr == 0x03 && cur_class == 0x03) { /* interrupt, HID */
                 s->hid_ep_interval = interval;
@@ -248,25 +277,36 @@ TEST_CASE("audio: init validates configuration and sizes the endpoint", "[usb]")
     fresh();
     TEST_ASSERT_EQUAL(ESP_OK, usb_device_init(NULL));
     usb_audio_config_t cfg = {
-        .ring = &s_ring, .sample_rate_hz = 16000, .channels = 1, .bits_per_sample = 16,
+        .direction = USB_AUDIO_DIR_MIC,
+        .mic = { .ring = &s_ring, .sample_rate_hz = 16000, .channels = 1, .bits_per_sample = 16 },
     };
     usb_audio_config_t bad;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(NULL));
-    bad = cfg; bad.ring = NULL;
+    bad = cfg; bad.mic.ring = NULL;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(&bad));
-    bad = cfg; bad.sample_rate_hz = 96000;
+    bad = cfg; bad.mic.sample_rate_hz = 96000;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(&bad));
-    bad = cfg; bad.bits_per_sample = 12;
+    bad = cfg; bad.mic.bits_per_sample = 12;
     TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(&bad));
-    bad = cfg; bad.channels = 2;
+    bad = cfg; bad.mic.channels = 3;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(&bad));
+    /* A speaker is refused either way, but for different reasons: without
+     * CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED there is no OUT path to enumerate at
+     * all; with it, this configuration still has no speaker ring or backlog
+     * source. Neither may silently enumerate as a microphone. */
+    bad = cfg; bad.direction = USB_AUDIO_DIR_HEADSET;
+#if CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(&bad));
+#else
     TEST_ASSERT_EQUAL(ESP_ERR_NOT_SUPPORTED, usb_audio_init(&bad));
+#endif
 
     TEST_ASSERT_EQUAL(ESP_OK, usb_audio_init(&cfg));
-    TEST_ASSERT_FALSE(usb_audio_is_streaming());
+    TEST_ASSERT_FALSE(usb_audio_is_streaming(USB_AUDIO_STREAM_MIC));
     usb_audio_stats_t st;
     TEST_ASSERT_EQUAL(ESP_OK, usb_audio_stats(&st));
-    TEST_ASSERT_EQUAL(32, st.nominal_packet_bytes); /* 16 samples/ms × 2 B */
-    TEST_ASSERT_EQUAL(0, st.packets);
+    TEST_ASSERT_EQUAL(32, st.mic.nominal_packet_bytes); /* 16 samples/ms × 2 B */
+    TEST_ASSERT_EQUAL(0, st.mic.packets);
 }
 
 TEST_CASE("composite: HID + UAC2 mic descriptor is well-formed with 1 ms intervals", "[usb]")
@@ -279,7 +319,8 @@ TEST_CASE("composite: HID + UAC2 mic descriptor is well-formed with 1 ms interva
         .report_descriptor_len = sizeof(s_hid_report_desc),
     };
     usb_audio_config_t uac = {
-        .ring = &s_ring, .sample_rate_hz = 48000, .channels = 1, .bits_per_sample = 16,
+        .direction = USB_AUDIO_DIR_MIC,
+        .mic = { .ring = &s_ring, .sample_rate_hz = 48000, .channels = 1, .bits_per_sample = 16 },
     };
     TEST_ASSERT_EQUAL(ESP_OK, usb_audio_init(&uac));
     TEST_ASSERT_EQUAL(ESP_OK, usb_hid_init(&hid));
@@ -339,10 +380,258 @@ TEST_CASE("composite: registration after start is refused; stop/deinit are clean
     TEST_ASSERT_EQUAL(ESP_OK, usb_device_deinit());
 }
 
+/* ------------------------------------------------------------------------- */
+/* Duplex headset: only built when the speaker direction is compiled in.      */
+/* Run with -D SDKCONFIG_DEFAULTS="...;sdkconfig.headset.defaults".           */
+/* ------------------------------------------------------------------------- */
+#if CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED
+
+static uint8_t   s_spk_storage[8192];
+static ringbuf_t s_spk_ring;
+static uint32_t  s_fake_backlog;
+
+static uint32_t fake_backlog_cb(void *ctx)
+{
+    return s_fake_backlog;
+}
+
+static usb_audio_config_t headset_cfg(void)
+{
+    usb_audio_config_t c = {
+        .direction = USB_AUDIO_DIR_HEADSET,
+        .mic     = { .ring = &s_ring,     .sample_rate_hz = 16000, .channels = 1, .bits_per_sample = 16 },
+        .speaker = { .ring = &s_spk_ring, .sample_rate_hz = 48000, .channels = 2, .bits_per_sample = 16 },
+        .speaker_backlog_cb = fake_backlog_cb,
+        .speaker_target_ms = 12,
+    };
+    return c;
+}
+
+static void fresh_headset(void)
+{
+    fresh();
+    TEST_ASSERT_EQUAL(ESP_OK, ringbuf_init(&s_spk_ring, s_spk_storage, sizeof(s_spk_storage)));
+    s_fake_backlog = 0;
+}
+
+TEST_CASE("headset: init validates the speaker direction's extra requirements", "[usb]")
+{
+    fresh_headset();
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_init(NULL));
+    usb_audio_config_t cfg = headset_cfg();
+    usb_audio_config_t bad;
+
+    /* The feedback servo has nothing to regulate without a backlog source. */
+    bad = cfg; bad.speaker_backlog_cb = NULL;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(&bad));
+    bad = cfg; bad.speaker.ring = NULL;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(&bad));
+    bad = cfg; bad.speaker.channels = 3;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(&bad));
+    /* 12 ms at 48 kHz stereo 16-bit is 2304 B; a ring that small cannot also hold
+     * a packet, so the servo could never reach its setpoint. */
+    static uint8_t tiny[2048];
+    static ringbuf_t tiny_ring;
+    TEST_ASSERT_EQUAL(ESP_OK, ringbuf_init(&tiny_ring, tiny, sizeof(tiny)));
+    bad = cfg; bad.speaker.ring = &tiny_ring;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, usb_audio_init(&bad));
+
+    TEST_ASSERT_EQUAL(ESP_OK, usb_audio_init(&cfg));
+    usb_audio_stats_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_audio_stats(&st));
+    TEST_ASSERT_EQUAL(32, st.mic.nominal_packet_bytes);        /* 16 smp/ms x 1ch x 2 B */
+    TEST_ASSERT_EQUAL(192, st.speaker.nominal_packet_bytes);   /* 48 smp/ms x 2ch x 2 B */
+    TEST_ASSERT_EQUAL(12 * 48 * 4, st.speaker.target_bytes);   /* 2304 B */
+    TEST_ASSERT_FALSE(usb_audio_is_streaming(USB_AUDIO_STREAM_MIC));
+    TEST_ASSERT_FALSE(usb_audio_is_streaming(USB_AUDIO_STREAM_SPEAKER));
+}
+
+TEST_CASE("headset: the duplex descriptor is one function with three interfaces", "[usb]")
+{
+    fresh_headset();
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_init(NULL));
+    usb_audio_config_t cfg = headset_cfg();
+    TEST_ASSERT_EQUAL(ESP_OK, usb_audio_init(&cfg));
+
+    const uint8_t *d = NULL;
+    size_t len = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_config_descriptor(&d, &len));
+    desc_summary_t sum;
+    walk(d, len, &sum);
+
+    /* One IAD covering AudioControl + two AudioStreaming interfaces: the host
+     * sees a single headset, not a microphone and a speaker. */
+    TEST_ASSERT_EQUAL_MESSAGE(1, sum.iads, "duplex audio must be one interface association");
+    TEST_ASSERT_EQUAL_MESSAGE(3, sum.audio_interfaces, "expected AC + 2 AS interfaces");
+    /* Each AS interface must offer a zero-bandwidth alternate 0 as well as the
+     * streaming alternate 1, or the host can never release the bandwidth
+     * reservation (FW-AUD-026, FW-AUD-057). AC has no alternates. */
+    TEST_ASSERT_EQUAL_MESSAGE(5, sum.audio_itf_descs, "each AS interface needs alt 0 and alt 1");
+    TEST_ASSERT_EQUAL(3, d[4]);                       /* bNumInterfaces */
+    TEST_ASSERT_EQUAL(len, (size_t)(d[2] | (d[3] << 8)));
+
+    /* Three endpoints: iso IN (mic), iso OUT (speaker), iso IN (feedback). */
+    TEST_ASSERT_EQUAL(3, sum.endpoints);
+    int iso_in = 0, iso_out = 0, fb = 0;
+    for (int i = 0; i < sum.endpoints; i++) {
+        TEST_ASSERT_EQUAL_MESSAGE(0x01, sum.eps[i].attr & 0x03, "audio endpoints must be isochronous");
+        TEST_ASSERT_EQUAL_MESSAGE(1, sum.eps[i].interval, "every audio endpoint is 1 ms");
+        if (EP_IS_FEEDBACK(sum.eps[i].attr)) {
+            fb++;
+            TEST_ASSERT_EQUAL_MESSAGE(0x80, sum.eps[i].addr & 0x80, "feedback must be an IN endpoint");
+            TEST_ASSERT_EQUAL_MESSAGE(4, sum.eps[i].mps, "UAC2 feedback packets are 4 bytes");
+        } else if (sum.eps[i].addr & 0x80) {
+            iso_in++;
+            TEST_ASSERT_EQUAL(34, sum.eps[i].mps);    /* (16 + 1) smp x 1ch x 2 B */
+        } else {
+            iso_out++;
+            TEST_ASSERT_EQUAL(196, sum.eps[i].mps);   /* (48 + 1) smp x 2ch x 2 B */
+        }
+    }
+    TEST_ASSERT_EQUAL_MESSAGE(1, iso_in, "exactly one mic data endpoint");
+    TEST_ASSERT_EQUAL_MESSAGE(1, iso_out, "exactly one speaker data endpoint");
+    TEST_ASSERT_EQUAL_MESSAGE(1, fb, "exactly one feedback endpoint");
+
+    usb_ep_budget_t used;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_budget(&used, NULL));
+    TEST_ASSERT_EQUAL(2, used.in_endpoints);   /* mic + feedback */
+    TEST_ASSERT_EQUAL(1, used.out_endpoints);  /* speaker */
+}
+
+TEST_CASE("headset: a mono speaker and a stereo mic also assemble", "[usb]")
+{
+    /* Channel count changes the feature unit's length, which is the one part of
+     * the hand-built descriptor whose size is not constant. walk() asserts that
+     * the emitted blocks tile the declared total exactly, so a length computed
+     * differently from the bytes written fails right here. */
+    fresh_headset();
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_init(NULL));
+    usb_audio_config_t cfg = headset_cfg();
+    cfg.mic.channels = 2;
+    cfg.speaker.channels = 1;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_audio_init(&cfg));
+
+    const uint8_t *d = NULL;
+    size_t len = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_config_descriptor(&d, &len));
+    desc_summary_t sum;
+    walk(d, len, &sum);
+    TEST_ASSERT_EQUAL(3, sum.audio_interfaces);
+    TEST_ASSERT_EQUAL(3, sum.endpoints);
+}
+
+TEST_CASE("headset: speaker-only is a two-interface function with a feedback endpoint", "[usb]")
+{
+    fresh_headset();
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_init(NULL));
+    usb_audio_config_t cfg = headset_cfg();
+    cfg.direction = USB_AUDIO_DIR_SPEAKER;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_audio_init(&cfg));
+
+    const uint8_t *d = NULL;
+    size_t len = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_config_descriptor(&d, &len));
+    desc_summary_t sum;
+    walk(d, len, &sum);
+    TEST_ASSERT_EQUAL(2, sum.audio_interfaces);   /* AC + 1 AS */
+    TEST_ASSERT_EQUAL(3, sum.audio_itf_descs);    /* AC, AS alt 0, AS alt 1 */
+    TEST_ASSERT_EQUAL(2, sum.endpoints);          /* iso OUT + feedback IN */
+
+    int fb = 0, out = 0;
+    for (int i = 0; i < sum.endpoints; i++) {
+        if (EP_IS_FEEDBACK(sum.eps[i].attr)) { fb++; } else { out++; }
+    }
+    TEST_ASSERT_EQUAL(1, fb);
+    TEST_ASSERT_EQUAL(1, out);
+
+    usb_ep_budget_t used;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_budget(&used, NULL));
+    TEST_ASSERT_EQUAL(1, used.in_endpoints);      /* feedback only */
+    TEST_ASSERT_EQUAL(1, used.out_endpoints);
+}
+
+TEST_CASE("headset: composite with HID still fits the endpoint budget", "[usb]")
+{
+    fresh_headset();
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_init(NULL));
+    usb_audio_config_t cfg = headset_cfg();
+    TEST_ASSERT_EQUAL(ESP_OK, usb_audio_init(&cfg));
+    usb_hid_config_t hid = {
+        .report_descriptor = s_hid_report_desc,
+        .report_descriptor_len = sizeof(s_hid_report_desc),
+    };
+    TEST_ASSERT_EQUAL(ESP_OK, usb_hid_init(&hid));
+
+    usb_ep_budget_t used, limit;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_budget(&used, &limit));
+    TEST_ASSERT_EQUAL(3, used.in_endpoints);      /* mic + feedback + HID */
+    TEST_ASSERT_EQUAL(1, used.out_endpoints);
+    TEST_ASSERT_TRUE_MESSAGE(used.in_endpoints <= limit.in_endpoints, "IN endpoints over budget");
+    TEST_ASSERT_TRUE_MESSAGE(used.tx_fifo_bytes <= limit.tx_fifo_bytes, "TX FIFO over budget");
+
+    const uint8_t *d = NULL;
+    size_t len = 0;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_config_descriptor(&d, &len));
+    desc_summary_t sum;
+    walk(d, len, &sum);
+    TEST_ASSERT_EQUAL(4, d[4]);                   /* AC + 2 AS + HID */
+    TEST_ASSERT_EQUAL(4, sum.endpoints);
+    TEST_ASSERT_EQUAL(1, sum.hid_ep_interval);
+}
+
+#endif /* CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED */
+
+#if CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED
+TEST_CASE("headset: enumerate the duplex descriptor against a real host", "[usb][needs_usb_host]")
+{
+    /* Starts the stack, so the USJ console dies here and takes Unity's output with
+     * it. The result is read from the HOST instead - on Windows:
+     *
+     *     Get-PnpDevice -Class MEDIA | Where-Object FriendlyName -match 'TinyUSB|ESP'
+     *     Get-PnpDevice -Status ERROR
+     *
+     * A descriptor the host rejects appears with a problem code rather than as an
+     * audio device; a descriptor it accepts appears once, with both a capture and a
+     * render endpoint, because FW-AUD-052 makes it one function. The device is held
+     * up for 90 s so there is time to look. */
+    fresh_headset();
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_init(NULL));
+    usb_audio_config_t uac = headset_cfg();
+    TEST_ASSERT_EQUAL(ESP_OK, usb_audio_init(&uac));
+    usb_hid_config_t hid = {
+        .report_descriptor = s_hid_report_desc,
+        .report_descriptor_len = sizeof(s_hid_report_desc),
+    };
+    TEST_ASSERT_EQUAL(ESP_OK, usb_hid_init(&hid));
+
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_start());
+
+    /* Report a backlog sitting exactly on the setpoint, so if the host does start
+     * streaming the servo has a sane starting point rather than slamming a clamp. */
+    usb_audio_stats_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_audio_stats(&st));
+    s_fake_backlog = st.speaker.target_bytes;
+
+    for (int i = 0; i < 90; i++) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(usb_device_is_mounted(), "host never enumerated the device");
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_stop());
+    TEST_ASSERT_EQUAL(ESP_OK, usb_device_deinit());
+}
+#endif
+
 void app_main(void)
 {
     UNITY_BEGIN();
+#if CONFIG_TEST_USB_HOST_ATTACHED
+    /* Opt-in build (sdkconfig.hostattach.defaults): ONLY the bus-touching cases.
+     * This severs a USB-Serial/JTAG console, so the result is read from the host. */
+    unity_run_tests_by_tag("[needs_usb_host]", false);
+#else
     /* Bus-touching tests are opt-in: they need a console that is not USB-Serial/JTAG. */
     unity_run_tests_by_tag("[needs_usb_host]", true);
+#endif
     UNITY_END();
 }

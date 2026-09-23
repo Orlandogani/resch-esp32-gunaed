@@ -31,4 +31,31 @@ menu "USB Audio (subsys/usb_audio)"
         default 3072
         range 2048 8192
 
+    config USB_AUDIO_SPEAKER_TARGET_MS
+        int "Speaker: backlog the feedback servo holds in the playback ring (ms)"
+        default 12
+        range 2 200
+        depends on TINYUSB_AUDIO_SPEAKER_ENABLED
+        help
+            The setpoint the asynchronous-sink servo regulates (ADR-021). It is the
+            latency the USB path adds on top of the playback driver's own prefill,
+            so keep it small; but it must stay above that prefill, or the two
+            controllers fight - audio_playback re-enters prefill whenever the ring
+            runs dry, which the servo then reads as "send faster".
+
+            Rule of thumb: CONFIG_AUDIO_PLAYBACK_PREFILL_MS plus a couple of
+            milliseconds of host jitter.
+
+    config USB_AUDIO_SPEAKER_FB_PERIOD_MS
+        int "Speaker: feedback recomputation period (ms)"
+        default 16
+        range 1 128
+        depends on TINYUSB_AUDIO_SPEAKER_ENABLED
+        help
+            The backlog is sampled every feeder tick and averaged over this period
+            before a new feedback value is sent. Averaging is what keeps host jitter
+            out of the servo; too short and the value chatters, too long and genuine
+            drift is corrected slowly. The endpoint keeps sending the last value
+            every frame regardless, so this is the servo's period, not the wire's.
+
 endmenu
