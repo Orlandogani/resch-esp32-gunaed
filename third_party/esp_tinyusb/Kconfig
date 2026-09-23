@@ -376,6 +376,48 @@ menu "TinyUSB Stack"
                 a FIFO of at least 4x the nominal packet. 8x absorbs producer jitter
                 of several milliseconds at the cost of latency.
 
+        config TINYUSB_AUDIO_SPEAKER_ENABLED
+            bool "Add the isochronous OUT (speaker) endpoint and its feedback endpoint"
+            depends on TINYUSB_AUDIO_ENABLED
+            default n
+            help
+                Compiles TinyUSB's audio OUT path and the explicit feedback endpoint,
+                turning the audio function from a microphone into a duplex headset.
+                Costs one isochronous OUT endpoint (which shares the RX FIFO and so
+                costs no TX FIFO RAM) plus one isochronous IN endpoint for feedback.
+
+                The device is an asynchronous sink: it tells the host how many samples
+                per frame to send, computed from the playback ring's fill level. See
+                ADR-021 and FW-AUD-056.
+
+                Leave this off for a microphone-only product; subsys/usb_audio then
+                refuses a speaker configuration at init rather than silently ignoring it.
+
+        config TINYUSB_AUDIO_EP_OUT_SZ_MAX
+            int "Audio function 1: isochronous OUT endpoint max packet size (bytes)"
+            depends on TINYUSB_AUDIO_SPEAKER_ENABLED
+            default 200
+            range 8 1023
+            help
+                Must be >= (samples_per_ms + 1) * channels * bytes_per_sample for the
+                highest advertised sample rate. 200 covers 48 kHz stereo 16-bit
+                ((48 + 1) * 2 * 2 = 196). The host may legitimately send a frame one
+                sample longer than nominal while it follows our feedback value, so the
+                "+ 1" is required, not slack.
+
+        config TINYUSB_AUDIO_EP_OUT_SW_BUF_MULT
+            int "Audio function 1: OUT software FIFO depth, in multiples of the EP size"
+            depends on TINYUSB_AUDIO_SPEAKER_ENABLED
+            default 6
+            range 4 64
+            help
+                TinyUSB's own note on feedback: a manually computed feedback value
+                (our case - the value comes from the playback ring, not from this
+                FIFO) typically needs about 6 frames of FIFO to absorb host jitter.
+                This buffer is drained every millisecond into the playback ring, so it
+                is a jitter absorber, not the elastic buffer; the elastic buffer is the
+                ring, and its depth is audio_playback's prefill.
+
         config TINYUSB_AUDIO_CTRL_BUF_SZ
             int "Audio class control request buffer size (bytes)"
             depends on TINYUSB_AUDIO_ENABLED

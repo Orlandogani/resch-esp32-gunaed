@@ -275,18 +275,34 @@ ESP_STATIC_ASSERT(CFG_TUD_VENDOR_TX_BUFSIZE >= EP_SIZE_VENDOR, "Vendor TX buffer
 #define CFG_TUD_BTH                 CONFIG_TINYUSB_BTH_ENABLED
 
 // ------------------------------------------------------------------------
-// PATCHED (ADR-017): USB Audio Class — one function, isochronous IN only.
-// Descriptors and callbacks live in the SDK's subsys/usb_audio component.
+// PATCHED (ADR-017, extended by ADR-021): USB Audio Class — one function,
+// isochronous IN (microphone), optionally isochronous OUT (speaker) with an
+// explicit feedback endpoint. Descriptors and callbacks live in the SDK's
+// subsys/usb_audio component.
 // ------------------------------------------------------------------------
 #define CFG_TUD_AUDIO               CONFIG_TINYUSB_AUDIO_ENABLED
 #if CFG_TUD_AUDIO
 #define CFG_TUD_AUDIO_ENABLE_EP_IN                  1
-#define CFG_TUD_AUDIO_ENABLE_EP_OUT                 0
-#define CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP            0   // IN-only: device is the clock master
 #define CFG_TUD_AUDIO_EP_IN_FLOW_CONTROL            1   // +/-1 sample packet-size servo (DES-AUD-003)
 #define CFG_TUD_AUDIO_CTRL_BUF_SZ                   CONFIG_TINYUSB_AUDIO_CTRL_BUF_SZ
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX           CONFIG_TINYUSB_AUDIO_EP_IN_SZ_MAX
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ        (CONFIG_TINYUSB_AUDIO_EP_IN_SW_BUF_MULT * CONFIG_TINYUSB_AUDIO_EP_IN_SZ_MAX)
+
+#ifdef CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED
+// Asynchronous sink: the host owns the clock, so an explicit feedback endpoint
+// tells it how many samples per frame to send (ADR-021). The value is computed by
+// subsys/usb_audio from the playback ring's fill level and written with
+// tud_audio_n_fb_set(); tud_audio_feedback_params_cb() therefore reports
+// AUDIO_FEEDBACK_METHOD_DISABLED, which leaves the driver's min/max clamp active
+// but its internal computation off. No SOF ISR is enabled.
+#define CFG_TUD_AUDIO_ENABLE_EP_OUT                 1
+#define CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP            1
+#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX          CONFIG_TINYUSB_AUDIO_EP_OUT_SZ_MAX
+#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ       (CONFIG_TINYUSB_AUDIO_EP_OUT_SW_BUF_MULT * CONFIG_TINYUSB_AUDIO_EP_OUT_SZ_MAX)
+#else
+#define CFG_TUD_AUDIO_ENABLE_EP_OUT                 0
+#define CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP            0
+#endif // CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED
 #endif // CFG_TUD_AUDIO
 
 // NCM NET Mode NTB buffers configuration
