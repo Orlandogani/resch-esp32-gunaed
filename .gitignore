@@ -1,17 +1,28 @@
 # ESP-IDF build output
 build/
+build_*/
 managed_components/
 dependencies.lock
 
-# Generated configuration — sdkconfig.defaults* is the source of truth (ADR-012)
+# Generated configuration — sdkconfig.defaults* is the source of truth (ADR-012).
+# A variant build writes sdkconfig.<variant> beside the tracked
+# sdkconfig.<variant>.defaults; only the defaults files belong in the repo.
 sdkconfig
 sdkconfig.old
 sdkconfig.bak
+sdkconfig.*
+!sdkconfig.defaults
+!sdkconfig.*.defaults
 
 # CMake
 CMakeCache.txt
 CMakeFiles/
 compile_commands.json
+
+# idf.py drops a .clangd into every project directory it builds. The one at the
+# repo root is the tracked source of truth; the generated copies are not.
+.clangd
+!/.clangd
 
 # IDE
 .vscode/

@@ -1,6 +1,8 @@
 # Alternative defaults for the ota test: 16 MiB dual-slot layout, so ota_init()
 # succeeds and the session state machine can be exercised.
-#   idf.py -B build_dual -D SDKCONFIG_DEFAULTS="../../sdkconfig.common.defaults;sdkconfig.dual.defaults" build
+#   idf.py -B build_dual -D SDKCONFIG=sdkconfig.dual \n#          -D SDKCONFIG_DEFAULTS="../../sdkconfig.common.defaults;sdkconfig.dual.defaults" build
+# SDKCONFIG must be given too: build directories do not get their own by
+# default, so without it this variant rewrites the single-slot build's config.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_TWO_OTA=y
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
