@@ -1,0 +1,38 @@
+menu "Application (headset)"
+
+    config HEADSET_ENABLE_USB
+        bool "Enter USOUND at boot (starts the USB device stack)"
+        default n
+        help
+            On the ESP32-S3 the USB-OTG PHY and the built-in USB-Serial/JTAG share
+            D+/D-. Starting TinyUSB removes the USJ console until the board is
+            re-plugged — and because this image re-takes the PHY about a second
+            after every boot, replugging alone does not bring COM4 back: recovery
+            is holding BOOT while replugging to reach ROM download mode.
+
+            This is the whole point of the usound profile, so it must eventually be
+            y. Leave it n while developing over USJ, and turn it on only with
+            someone at the board or once TBD-009 (the UART console bridge) closes.
+
+    menu "Button pins"
+
+        config HEADSET_BTN_PIN_VOL_DOWN
+            int "Volume down"
+            default 10
+
+        config HEADSET_BTN_PIN_VOL_UP
+            int "Volume up"
+            default 11
+
+        config HEADSET_BTN_PIN_ACTION
+            int "Play/pause, and long-press mode override"
+            default 0
+            help
+                Defaults to GPIO 0, the BOOT button, because it is the one control
+                physically present on an S3 devkit and so the only one that can be
+                exercised before the enclosure exists. It is RTC-capable, so it also
+                serves as the deep-sleep wake source. The other two are placeholders.
+
+    endmenu
+
+endmenu

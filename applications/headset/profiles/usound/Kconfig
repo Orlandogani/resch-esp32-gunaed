@@ -1,0 +1,90 @@
+menu "Profile: usound (wired USB headset)"
+
+    config USOUND_SPEAKER_SAMPLE_RATE_HZ
+        int "Speaker sample rate (Hz)"
+        default 48000
+        range 8000 48000
+        help
+            What the UAC2 speaker interface advertises and what audio_playback is
+            configured for; the two must agree or the feedback servo regulates a
+            ring that is filling at a different rate than it drains. 48 kHz is what
+            hosts expect of a headset and what Windows selected during the
+            2026-09-22 enumeration test.
+
+    config USOUND_SPEAKER_CHANNELS
+        int "Speaker channel count"
+        default 2
+        range 1 2
+        help
+            FW-AUD-054: 1 or 2. The descriptor's channel cluster and the I2S slot
+            configuration both follow this.
+
+    config USOUND_MIC_SAMPLE_RATE_HZ
+        int "Microphone sample rate (Hz)"
+        default 16000
+        range 8000 48000
+        help
+            Independent of the speaker rate: each direction has its own clock source
+            entity (FW-AUD-053), which is the point of the duplex descriptor. The
+            host read 16 kHz capture beside 48 kHz render on 2026-09-22.
+
+    config USOUND_PLAYBACK_RING_MS
+        int "Playback ring capacity (ms of audio)"
+        default 60
+        range 20 500
+        help
+            The elastic buffer between the USB host and the I2S clock (ADR-014). It
+            must exceed CONFIG_USB_AUDIO_SPEAKER_TARGET_MS plus one packet or
+            usb_audio_init() refuses the configuration (FW-AUD-059); the margin above
+            that is how much host jitter the ring absorbs before the servo has to
+            act. 60 ms at 48 kHz stereo 16-bit is 11520 bytes of internal RAM.
+
+    menu "Speaker (I2S TX) pins"
+
+        config USOUND_SPK_PIN_BCLK
+            int "I2S BCLK"
+            default 15
+
+        config USOUND_SPK_PIN_WS
+            int "I2S WS / LRCLK"
+            default 16
+
+        config USOUND_SPK_PIN_DOUT
+            int "I2S DOUT"
+            default 17
+
+        config USOUND_SPK_PIN_MCLK
+            int "I2S MCLK (-1 if the DAC needs none)"
+            default -1
+            help
+                Which DAC or amplifier part this is remains open (TBD-010), so these
+                four pins are placeholders chosen not to collide with the microphone
+                pins in applications/gunshot-aed. Set them for the real board before
+                trusting a playback measurement.
+
+    endmenu
+
+    menu "Microphone (I2S RX) pins"
+
+        config USOUND_MIC_PDM
+            bool "Microphone is PDM (else standard I2S)"
+            default y
+
+        config USOUND_MIC_PIN_CLK
+            int "PDM CLK or I2S BCLK"
+            default 4
+
+        config USOUND_MIC_PIN_WS
+            int "I2S WS (ignored for PDM)"
+            default 5
+
+        config USOUND_MIC_PIN_DIN
+            int "Data in"
+            default 6
+            help
+                Same defaults as applications/gunshot-aed, and equally provisional:
+                the microphone part is TBD-002.
+
+    endmenu
+
+endmenu

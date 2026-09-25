@@ -1,5 +1,9 @@
 # SDK component conventions - included by every component under subsys/, drivers/, lib/.
 #
+# Product components under applications/<product>/ may opt in as well, and the
+# headset's profiles/ do: policy code is not held to a laxer standard than mechanism
+# just because it is product-specific. Only the relative path differs.
+#
 # Usage, at the end of a component's CMakeLists.txt after idf_component_register():
 #
 #     include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/sdk_component.cmake)

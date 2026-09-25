@@ -1,0 +1,112 @@
+# Headset — Phase 1 (`usound`) configuration baseline.
+#
+# This file is the version-controlled source of truth for configuration (ADR-012,
+# SYS-BLD-002). The generated `sdkconfig` is a build artefact and is git-ignored.
+# To apply a change made here: delete `sdkconfig` and rebuild, or run
+# `idf.py reconfigure` after `idf.py fullclean`.
+#
+# Every non-default value below carries the requirement or ADR that motivates it.
+# A value with no justification is a defect in this file.
+
+# ---------------------------------------------------------------------------
+# Target and toolchain (CON-01, CON-06)
+# ---------------------------------------------------------------------------
+CONFIG_IDF_TARGET="esp32s3"
+
+# ---------------------------------------------------------------------------
+# Flash: 16 MiB, custom dual-slot partition table (ADR-008, SYS-OTA-009)
+# ---------------------------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+# ---------------------------------------------------------------------------
+# Bootloader: rollback on unconfirmed image (SYS-OTA-005, FW-OTA-006)
+# ---------------------------------------------------------------------------
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# ---------------------------------------------------------------------------
+# PSRAM: 8 MiB octal (ADR-014 — never on the hot path; caps-alloc only so plain
+# malloc() stays internal, which is what keeps the playback ring in internal RAM).
+# ---------------------------------------------------------------------------
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# ---------------------------------------------------------------------------
+# Power management (SYS-PWR-005, FW-PWR-001)
+# ---------------------------------------------------------------------------
+CONFIG_PM_ENABLE=y
+CONFIG_POWER_ENABLE_DFS=y
+CONFIG_POWER_MAX_FREQ_MHZ=240
+CONFIG_POWER_MIN_FREQ_MHZ=80
+
+# ---------------------------------------------------------------------------
+# FreeRTOS: 1 kHz tick (ADR-010). Deadline paths still never use the tick (TM1).
+# ---------------------------------------------------------------------------
+CONFIG_FREERTOS_HZ=1000
+
+# ---------------------------------------------------------------------------
+# Supervision (SYS-DIAG-003) and crash capture (SYS-DIAG-004, FW-DIAG-004)
+# ---------------------------------------------------------------------------
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# ---------------------------------------------------------------------------
+# Logging (SYS-DIAG-002, FW-DIAG-007)
+# ---------------------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+CONFIG_LOG_DYNAMIC_LEVEL_CONTROL=y
+
+# ---------------------------------------------------------------------------
+# Radios: off for Phase 1.
+#
+# `usound` is the wired baseline that Phases 2 and 3 get measured against, and it
+# needs neither. Leaving Bluedroid and Wi-Fi out keeps the DRAM the duplex audio
+# path competes for (SDD §13.2) and keeps MINIMAL_BUILD honest. Phase 2 turns
+# CONFIG_BT_ENABLED back on together with its ADR.
+# ---------------------------------------------------------------------------
+CONFIG_BT_ENABLED=n
+CONFIG_ESP_WIFI_ENABLED=n
+
+# ---------------------------------------------------------------------------
+# USB device stack: duplex UAC2 headset (ADR-017 vendored esp_tinyusb, ADR-021)
+#
+# TINYUSB_AUDIO_SPEAKER_ENABLED is what compiles the OUT path and the feedback
+# endpoint. Without it usb_audio_init() refuses a speaker direction outright
+# rather than silently enumerating as a microphone (FW-AUD-050).
+#
+# TINYUSB_PM=n: the device must not autonomously drop into a sleep state under a
+# host that is mid-stream. The stream lock in pm_policy is what governs sleep here.
+# ---------------------------------------------------------------------------
+CONFIG_TINYUSB_HID_COUNT=1
+CONFIG_TINYUSB_AUDIO_ENABLED=y
+CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED=y
+CONFIG_TINYUSB_PM=n
+
+# ---------------------------------------------------------------------------
+# The one coupling that will bite if it is ever inverted (ADR-021 consequences).
+#
+# The feedback setpoint must stay ABOVE the playback prefill. Below it, the
+# playback driver re-enters prefill every time the ring runs dry, the servo reads
+# that as "host, send faster", and the two controllers fight each other — audibly.
+#
+#     CONFIG_USB_AUDIO_SPEAKER_TARGET_MS  >  CONFIG_AUDIO_PLAYBACK_PREFILL_MS
+#
+# Both are stated here rather than left to their Kconfig defaults precisely so the
+# relationship is visible in one place when either is tuned.
+# ---------------------------------------------------------------------------
+CONFIG_AUDIO_PLAYBACK_PREFILL_MS=10
+CONFIG_USB_AUDIO_SPEAKER_TARGET_MS=16
+CONFIG_USB_AUDIO_SPEAKER_FB_PERIOD_MS=16
