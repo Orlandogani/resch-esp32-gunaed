@@ -39,3 +39,6 @@ Thumbs.db
 
 # Third-party
 .claude/
+
+# Other
+__pycache__/
