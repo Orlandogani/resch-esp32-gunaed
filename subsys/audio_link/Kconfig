@@ -1,0 +1,167 @@
+menu "Wireless audio link (subsys/audio_link)"
+
+    choice AUDIO_LINK_FRAME
+        prompt "Codec frame duration"
+        default AUDIO_LINK_FRAME_10MS
+        help
+            One frame is one packet on the air. Shorter frames cut latency and
+            raise the packet rate (and header overhead); longer frames do the
+            opposite. Both ends must agree: the duration is part of the format
+            code every audio frame carries, and a mismatch is dropped and reported.
+
+        config AUDIO_LINK_FRAME_5MS
+            bool "5 ms"
+        config AUDIO_LINK_FRAME_10MS
+            bool "10 ms"
+        config AUDIO_LINK_FRAME_20MS
+            bool "20 ms"
+    endchoice
+
+    config AUDIO_LINK_FRAME_US
+        int
+        default 5000 if AUDIO_LINK_FRAME_5MS
+        default 20000 if AUDIO_LINK_FRAME_20MS
+        default 10000
+
+    config AUDIO_LINK_BITRATE_STEREO
+        int "Default Opus bitrate for a stereo stream (bit/s)"
+        default 96000
+        range 24000 160000
+        help
+            Used when audio_link_stream_t.bitrate_bps is 0 and the stream has two
+            channels. Constant bitrate: every frame is bitrate x frame / 8 bytes,
+            so this directly sets airtime per frame. 96 kbit/s at 10 ms is 120
+            bytes. The ceiling keeps one frame inside one ATT payload.
+
+    config AUDIO_LINK_BITRATE_MONO
+        int "Default Opus bitrate for a mono stream (bit/s)"
+        default 24000
+        range 8000 96000
+        help
+            Used for a one-channel stream, typically the 16 kHz microphone uplink.
+
+    config AUDIO_LINK_OPUS_COMPLEXITY
+        int "Opus encoder complexity"
+        default 1
+        range 0 10
+        help
+            CPU against quality at a given bitrate; it changes the encoder only.
+            Measured on target, 48 kHz stereo 10 ms frames at 96 kbit/s, 240 MHz,
+            32 KiB I-cache / 64 KiB D-cache (2026-09-26):
+
+                complexity 5: encode 7.1 ms per frame   decode 3.2 ms
+                complexity 1: encode 4.9 ms per frame   decode 3.2 ms
+
+            At 5 the dongle's stereo encode alone takes ~70 % of a core. Raise it
+            only with the benchmark case of tests/subsys/audio_link showing the
+            slower end still has headroom.
+
+    config AUDIO_LINK_TASK_PRIORITY
+        int "Link task priority"
+        default 17
+        range 1 24
+        help
+            Below the 1 ms audio feeders (19) and the USB device task (18), which
+            share core 1: they have millisecond deadlines, while a codec frame
+            that takes a few milliseconds has a whole frame of slack.
+
+    config AUDIO_LINK_TASK_CORE
+        int "Link task core affinity"
+        default 1
+        range 0 1
+        help
+            Core 1, away from the Bluedroid host on core 0 (ADR-009).
+
+    config AUDIO_LINK_TASK_STACK
+        int "Link task stack (bytes)"
+        default 32768
+        range 8192 65536
+        help
+            libopus is built with C99 variable-length arrays for its scratch
+            (ADR-024), so the codec's working memory is this stack. Measured peak
+            with 48 kHz stereo encode + decode on one task: 26.3 KiB at complexity
+            5, 21.9 KiB at complexity 1 (2026-09-26). 24 KiB overflowed. The stats
+            report the high-water mark; keep several KiB of margin.
+
+    config AUDIO_LINK_RX_QUEUE_DEPTH
+        int "Receive queue depth (frames and events)"
+        default 12
+        range 4 32
+        help
+            Frames arriving from the transport wait here for the link task. Each
+            slot is about 260 bytes of static RAM.
+
+    config AUDIO_LINK_MAX_CONCEAL_FRAMES
+        int "Longest run of frames to conceal"
+        default 5
+        range 1 20
+        help
+            A sequence gap up to this many frames is filled with packet-loss
+            concealment; a longer one resynchronises instead. Also caps
+            consecutive concealed frames while nothing arrives, after which the
+            consumer is allowed to underrun into silence.
+
+    config AUDIO_LINK_CONCEAL_LOW_WATER_MS
+        int "Conceal when the downstream backlog falls below (ms)"
+        default 10
+        range 0 100
+        help
+            With rx_backlog_cb set: when a frame is half a period overdue and the
+            consumer holds less than this, one frame is concealed on the frame
+            clock. Should match the playback driver's prefill.
+
+    config AUDIO_LINK_TX_MAX_BACKLOG_MS
+        int "Transmit backlog limit (ms)"
+        default 40
+        range 10 500
+        help
+            Unsent audio beyond this is discarded (and counted) rather than sent
+            late: latency is bounded, and the far end conceals the gap.
+
+    config AUDIO_LINK_CONN_INTERVAL
+        int "BLE connection interval requested by the central (1.25 ms units)"
+        default 8
+        range 6 40
+        help
+            8 = 10 ms, one connection event per 10 ms frame. Shorter intervals
+            cut latency and retransmission delay and cost radio-on time on the
+            battery-powered peripheral.
+
+    config AUDIO_LINK_SUPERVISION_TIMEOUT_MS
+        int "BLE supervision timeout (ms)"
+        default 1000
+        range 200 10000
+        help
+            How long the link survives silence before both ends declare it lost
+            and the central starts scanning again.
+
+    config AUDIO_LINK_REQUIRE_ENCRYPTION
+        bool "Require an encrypted (bonded) link"
+        default y
+        help
+            The peripheral's downlink and CCCD refuse an unencrypted client, and
+            the central pairs before it discovers the service. LE Secure
+            Connections, Just Works (subsys/ble). Turning this off leaves the
+            audio readable by anyone in range.
+
+    config AUDIO_LINK_RECONNECT_DELAY_MS
+        int "Central: delay before scanning again after a loss (ms)"
+        default 500
+        range 0 10000
+
+    config AUDIO_LINK_CPU_FREQ_LOCK
+        bool "Hold the CPU at its maximum frequency while the link is up"
+        default y
+        depends on PM_ENABLE
+        help
+            With dynamic frequency scaling the CPU otherwise idles at its minimum,
+            where Opus at 48 kHz stereo may not finish a frame within a frame.
+
+    config AUDIO_LINK_TEST_HOOKS
+        bool "Test hooks (loss and reorder injection on the loopback transport)"
+        default n
+        help
+            Adds audio_link_test_drop_next() and audio_link_test_swap_next(). For
+            the on-target test project only.
+
+endmenu

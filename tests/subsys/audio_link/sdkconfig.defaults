@@ -1,0 +1,13 @@
+# The whole pipeline runs over the loopback transport on one board, so the radio is
+# not needed: subsys/ble compiles to its honest stubs (FW-BLE-011).
+CONFIG_BT_ENABLED=n
+# Loss and reorder injection (audio_link_test_drop_next / _swap_next).
+CONFIG_AUDIO_LINK_TEST_HOOKS=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# Measure what the products run: 240 MHz (they hold the CPU at maximum while linked,
+# FW-LNK-009) and the larger caches they configure. libopus runs from flash, so the
+# instruction cache is worth ~13 % of encode time and ~27 % of decode time (measured
+# 2026-09-26, complexity 5).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
