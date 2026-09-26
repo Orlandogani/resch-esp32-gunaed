@@ -1,0 +1,15 @@
+# Dongle variant: the real USB host side (UAC2 duplex + HID) — the shipping image.
+#
+# A separate variant only because flashing it severs the USB-Serial/JTAG console (see
+# CONFIG_DONGLE_ENABLE_USB's help), so the default build emulates the PC and CI builds
+# this one without ever flashing it.
+#
+# Applied on top of sdkconfig.defaults. SDKCONFIG must be given too, or this variant
+# rewrites the default build's configuration and the two silently share one:
+#
+#   idf.py -C applications/dongle -B build_usb -D SDKCONFIG=sdkconfig.usb \
+#          -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb.defaults" build
+#
+# Recovering the board afterwards means holding BOOT while replugging to reach ROM
+# download mode — replugging alone will not do it.
+CONFIG_DONGLE_ENABLE_USB=y

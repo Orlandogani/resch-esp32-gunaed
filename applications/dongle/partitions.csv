@@ -1,0 +1,16 @@
+# Dongle — 16 MiB flash layout (ADR-008, SYS-OTA-009)
+#
+# Same geometry as applications/gunshot-aed and headset: two 4 MiB application slots leave room
+# for a build carrying TinyUSB, a BLE host and Opus with ample margin. The dongle
+# is updated through the same dual-slot path as the headset, so a firmware fix
+# is an OTA away rather than a reflash.
+# otadata is dual-copy and power-fail safe by design. App partitions are 64 KiB aligned.
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x10000,
+otadata,    data, ota,      0x19000,  0x2000,
+phy_init,   data, phy,      0x1B000,  0x1000,
+coredump,   data, coredump, 0x1C000,  0x10000,
+ota_0,      app,  ota_0,    0x30000,  0x400000,
+ota_1,      app,  ota_1,    0x430000, 0x400000,
+storage,    data, spiffs,   0x830000, 0x7D0000,

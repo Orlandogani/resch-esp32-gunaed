@@ -1,0 +1,100 @@
+menu "Application (dongle)"
+
+    config DONGLE_ENABLE_USB
+        bool "Drive the real USB host side (starts the USB device stack)"
+        default n
+        help
+            On the ESP32-S3 the USB-OTG PHY and the built-in USB-Serial/JTAG share
+            D+/D-. Starting TinyUSB removes the USJ console, and because this image
+            takes the PHY about a second after every boot, replugging alone does
+            not bring the port back: recovery is holding BOOT while replugging to
+            reach ROM download mode (CLAUDE.md hard rule 1, TBD-009).
+
+            n (the default) builds the console-safe dongle: host_port emulates the
+            PC — a 1 kHz tone into the speaker path, following the same feedback
+            law as a real host — so the radio link can be developed and soaked
+            with both boards' consoles intact. y is the shipping image.
+
+    choice DONGLE_BACKEND
+        prompt "Backend at boot"
+        default DONGLE_BACKEND_WLINK
+        help
+            What happens to the host's audio. A long press of the action button
+            switches to the other backend at runtime.
+
+        config DONGLE_BACKEND_WLINK
+            bool "wlink: bridge to the headset over the wireless link"
+        config DONGLE_BACKEND_TONE
+            bool "tone: terminate both directions on the dongle (diagnostic)"
+    endchoice
+
+    config DONGLE_DEVICE_NAME
+        string "BLE name"
+        default "esp32s3-dongle"
+        help
+            The central's own name; the headset does not match on it.
+
+    config DONGLE_USB_PRODUCT
+        string "USB product string"
+        default "Wireless Headset"
+        help
+            What the host shows for the audio device. VID/PID come from
+            subsys/usb_device (TBD-006).
+
+    config DONGLE_SPEAKER_SAMPLE_RATE_HZ
+        int "Speaker (host -> headset) sample rate (Hz)"
+        default 48000
+        help
+            Must equal the headset's WLINK_SPEAKER_SAMPLE_RATE_HZ (it travels in
+            every audio frame's format code) and be a rate Opus codes natively:
+            8000, 12000, 16000, 24000 or 48000.
+
+    config DONGLE_SPEAKER_CHANNELS
+        int "Speaker channels"
+        default 2
+        range 1 2
+
+    config DONGLE_MIC_SAMPLE_RATE_HZ
+        int "Microphone (headset -> host) sample rate (Hz)"
+        default 16000
+        help
+            Must equal the headset's WLINK_MIC_SAMPLE_RATE_HZ. Mono.
+
+    config DONGLE_SPEAKER_RING_MS
+        int "Speaker ring capacity (ms)"
+        default 100
+        range 40 500
+        help
+            Holds what the host sent until the backend takes it. Must exceed
+            DONGLE_PATH_TARGET_MS plus a packet (usb_audio refuses it otherwise,
+            FW-AUD-059). 100 ms at 48 kHz stereo is 19200 bytes of internal RAM.
+
+    config DONGLE_MIC_RING_MS
+        int "Microphone ring capacity (ms)"
+        default 100
+        range 20 500
+
+    config DONGLE_PATH_TARGET_MS
+        int "Speaker path backlog setpoint (ms)"
+        default 40
+        range 10 200
+        help
+            What the host-side servo holds along the whole speaker path: what the
+            dongle has not yet sent plus what the headset reports it is holding
+            for playback (ADR-022). Most of it sits in the headset's playback
+            ring, as the jitter buffer against radio retransmission bursts.
+            Lower is lower latency and less resilience; it must stay above the
+            headset's playback prefill plus one codec frame.
+
+    config DONGLE_STATS_PERIOD_S
+        int "Counter log period (s)"
+        default 5
+        range 1 3600
+
+    config DONGLE_BTN_PIN_ACTION
+        int "Action button GPIO (long press switches backend)"
+        default 0
+        help
+            GPIO 0 is the BOOT button, present on every S3 devkit.
+
+endmenu

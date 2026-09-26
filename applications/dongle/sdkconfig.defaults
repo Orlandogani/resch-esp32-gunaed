@@ -1,0 +1,116 @@
+# Dongle — configuration baseline.
+#
+# This file is the version-controlled source of truth for configuration (ADR-012,
+# SYS-BLD-002). The generated `sdkconfig` is a build artefact and is git-ignored.
+# To apply a change made here: delete `sdkconfig` and rebuild.
+#
+# Every non-default value below carries the requirement or ADR that motivates it.
+# The default build is console-safe (DONGLE_ENABLE_USB=n): the PC is emulated and the
+# USB-Serial/JTAG console survives. sdkconfig.usb.defaults is the shipping image.
+
+# ---------------------------------------------------------------------------
+# Target and toolchain (CON-01, CON-06)
+# ---------------------------------------------------------------------------
+CONFIG_IDF_TARGET="esp32s3"
+
+# ---------------------------------------------------------------------------
+# Flash: 16 MiB, custom dual-slot partition table (ADR-008, SYS-OTA-009)
+# ---------------------------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+# ---------------------------------------------------------------------------
+# Bootloader: rollback on unconfirmed image (SYS-OTA-005, FW-OTA-006)
+# ---------------------------------------------------------------------------
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# ---------------------------------------------------------------------------
+# PSRAM: 8 MiB octal, caps-alloc only so plain malloc() stays internal (ADR-014).
+# ---------------------------------------------------------------------------
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# ---------------------------------------------------------------------------
+# Power: bus-powered, so no sleep policy — but DFS stays on and audio_link holds
+# the CPU at its maximum while the link is up (CONFIG_AUDIO_LINK_CPU_FREQ_LOCK).
+# The 48 kHz stereo Opus encode, the expensive half of the codec, runs here.
+# ---------------------------------------------------------------------------
+CONFIG_PM_ENABLE=y
+CONFIG_POWER_ENABLE_DFS=y
+CONFIG_POWER_MAX_FREQ_MHZ=240
+CONFIG_POWER_MIN_FREQ_MHZ=80
+
+# ---------------------------------------------------------------------------
+# Caches: 32 KiB instruction, 64 KiB data (defaults 16/32). libopus runs from flash,
+# and the larger caches cut the codec's time per frame by 13 % (encode) and 27 %
+# (decode), measured on target 2026-09-26. Costs 48 KiB of internal SRAM.
+# ---------------------------------------------------------------------------
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+
+# ---------------------------------------------------------------------------
+# FreeRTOS: 1 kHz tick (ADR-010). audio_link's frame clock is 10 ticks.
+# ---------------------------------------------------------------------------
+CONFIG_FREERTOS_HZ=1000
+
+# ---------------------------------------------------------------------------
+# Supervision (SYS-DIAG-003) and crash capture (SYS-DIAG-004, FW-DIAG-004)
+# ---------------------------------------------------------------------------
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# ---------------------------------------------------------------------------
+# Logging (SYS-DIAG-002, FW-DIAG-007)
+# ---------------------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+CONFIG_LOG_DYNAMIC_LEVEL_CONTROL=y
+
+# ---------------------------------------------------------------------------
+# Radio: Bluetooth LE central for the link (ADR-022); Wi-Fi off.
+#
+# Bluedroid, LE only, BLE 5.0 API set (ADR-023). The dongle scans for the audio link
+# service and is the GATT client, so it needs GATTC and extended scanning; it also
+# registers a GATT server application (subsys/ble always does), which is harmless.
+# Bonds in NVS: the link requires encryption.
+# ---------------------------------------------------------------------------
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_CLASSIC_ENABLED=n
+CONFIG_BT_GATTS_ENABLE=y
+CONFIG_BT_GATTC_ENABLE=y
+CONFIG_BT_SMP_ENABLE=y
+CONFIG_BT_BLE_SMP_BOND_NVS_FLASH=y
+CONFIG_BT_BLUEDROID_PINNED_TO_CORE_0=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=n
+CONFIG_BT_BLE_50_EXTEND_ADV_EN=y
+CONFIG_BT_BLE_50_EXTEND_SCAN_EN=y
+CONFIG_BT_BLE_50_PERIODIC_ADV_EN=n
+CONFIG_BT_BLE_50_EXTEND_SYNC_EN=n
+CONFIG_BT_BLE_50_DTM_TEST_EN=n
+CONFIG_ESP_WIFI_ENABLED=n
+
+# ---------------------------------------------------------------------------
+# USB device stack: duplex UAC2 (ADR-017 vendored esp_tinyusb, ADR-021). Compiled in
+# every build; only started with DONGLE_ENABLE_USB (sdkconfig.usb.defaults).
+# TINYUSB_PM=n: the device must not autonomously sleep under a host mid-stream.
+# ---------------------------------------------------------------------------
+CONFIG_TINYUSB_HID_COUNT=1
+CONFIG_TINYUSB_AUDIO_ENABLED=y
+CONFIG_TINYUSB_AUDIO_SPEAKER_ENABLED=y
+CONFIG_TINYUSB_PM=n
+CONFIG_USB_AUDIO_SPEAKER_FB_PERIOD_MS=16
