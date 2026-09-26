@@ -3,15 +3,18 @@
  * (SAD §2.2, ADR-013) — main/ decides *which* profile runs, never *how* it behaves.
  *
  * A mode switch is exactly this: revoke the four resources from profile A, grant
- * them to profile B. Phase 1 ships one profile, but the arbitration is built for
- * the hand-off from day one so that Phase 2 adds a profile rather than a redesign
- * (applications/headset/docs/design.md).
+ * them to profile B (applications/headset/docs/design.md).
  *
  *     [*] --> IDLE
- *     IDLE     --> USOUND   : USB transport available
+ *     IDLE     --> USOUND   : USB transport available (boot, with HEADSET_ENABLE_USB)
+ *     IDLE     --> WIRELESS : boot without USB, action press, or the retry timer
  *     USOUND   --> IDLE     : USB detached
- *     IDLE     --> WIRELESS : Phase 2, dongle link up
- *     WIRELESS --> USOUND   : wired wins
+ *     WIRELESS --> IDLE     : dongle gone longer than the profile's grace period
+ *     USOUND  <--> WIRELESS : action long press (both profiles compiled)
+ *
+ * The whole state machine runs on the main task. Button events arrive on the buttons
+ * task, so a mode request is posted to the main task as a notification bit rather
+ * than acted on where it is noticed.
  *
  * The rings are owned here, not by a profile, so their storage survives a mode
  * change: re-allocating a ring on every switch would fragment the heap and race
@@ -25,6 +28,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 
 #include "buttons.h"
@@ -35,6 +39,9 @@
 #include "power.h"
 #include "ringbuf.h"
 #include "usound.h"
+#if CONFIG_HEADSET_ENABLE_WIRELESS
+#include "wlink.h"
+#endif
 
 static const char *TAG = "headset";
 
@@ -45,9 +52,14 @@ static const char *TAG = "headset";
 typedef enum {
     MODE_IDLE = 0,
     MODE_USOUND,
+    MODE_WIRELESS,
 } headset_mode_t;
 
-static const char *const s_mode_names[] = { "IDLE", "USOUND" };
+static const char *const s_mode_names[] = { "IDLE", "USOUND", "WIRELESS" };
+
+/* Requests posted to the main task (notification bits). */
+#define REQ_OVERRIDE   (1u << 0)   /* action long press: switch wired <-> wireless */
+#define REQ_WAKE_LINK  (1u << 1)   /* action press while IDLE: advertise now       */
 
 /* -------------------------------------------------------------------------- */
 /* Owned resources                                                             */
@@ -63,6 +75,8 @@ static struct {
 
     headset_mode_t           mode;
     const headset_profile_t *active;
+    TaskHandle_t             main_task;
+    int64_t                  idle_since_us;
 } s_hs;
 
 /* -------------------------------------------------------------------------- */
@@ -87,11 +101,25 @@ static void on_fault(uint32_t code, const char *detail, void *ctx)
     ESP_LOGE(TAG, "system entered FAULT (0x%08" PRIx32 "): %s", code, detail);
 }
 
+static const headset_profile_t *profile_for(headset_mode_t mode)
+{
+    switch (mode) {
+    case MODE_USOUND:
+        return usound_profile();
+#if CONFIG_HEADSET_ENABLE_WIRELESS
+    case MODE_WIRELESS:
+        return wlink_profile();
+#endif
+    default:
+        return NULL;
+    }
+}
+
 /* -------------------------------------------------------------------------- */
-/* Mode transitions                                                            */
+/* Mode transitions — main task only                                           */
 /* -------------------------------------------------------------------------- */
 
-static void mode_enter(headset_mode_t mode, const headset_profile_t *profile)
+static void mode_enter(headset_mode_t mode)
 {
     if (s_hs.mode == mode) {
         return;
@@ -105,6 +133,7 @@ static void mode_enter(headset_mode_t mode, const headset_profile_t *profile)
         s_hs.active = NULL;
     }
 
+    const headset_profile_t *profile = profile_for(mode);
     if (profile != NULL) {
         const headset_profile_resources_t res = {
             .playback_ring = &s_hs.playback_ring,
@@ -115,32 +144,57 @@ static void mode_enter(headset_mode_t mode, const headset_profile_t *profile)
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "%s failed to start (%s); staying IDLE",
                      profile->name, esp_err_to_name(err));
-            s_hs.mode = MODE_IDLE;
-            ESP_LOGI(TAG, "mode = %s", s_mode_names[s_hs.mode]);
-            return;
+            mode = MODE_IDLE;
+        } else {
+            s_hs.active = profile;
         }
-        s_hs.active = profile;
     }
 
     s_hs.mode = mode;
+    if (mode == MODE_IDLE) {
+        s_hs.idle_since_us = esp_timer_get_time();
+    }
     ESP_LOGI(TAG, "mode = %s", s_mode_names[mode]);
 }
 
-/* Button events reach main/ first so it can consume the mode override before the
- * active profile ever sees it. */
+static void handle_requests(uint32_t req)
+{
+    if (req & REQ_OVERRIDE) {
+#if CONFIG_HEADSET_ENABLE_USB && CONFIG_HEADSET_ENABLE_WIRELESS
+        mode_enter(s_hs.mode == MODE_USOUND ? MODE_WIRELESS : MODE_USOUND);
+#else
+        /* With one profile compiled in there is nothing to switch to, and saying so
+         * beats silence. */
+        ESP_LOGI(TAG, "mode override requested; no alternative profile in this image");
+#endif
+    }
+#if CONFIG_HEADSET_ENABLE_WIRELESS
+    if ((req & REQ_WAKE_LINK) && s_hs.mode == MODE_IDLE) {
+        mode_enter(MODE_WIRELESS);
+    }
+#endif
+}
+
+/* Button events reach main/ first so it can consume the mode controls before the
+ * active profile ever sees them. Buttons task context: post, never act. */
 static void on_button(buttons_event_t evt, const buttons_event_info_t *info, void *ctx)
 {
     (void)ctx;
 
-    if (evt == BUTTONS_EVENT_LONG_PRESS && info->index == HEADSET_BTN_ACTION) {
-        /* Phase 2: this is the wired/wireless override. With one profile compiled
-         * in there is nothing to switch to, and saying so beats silence. */
-        ESP_LOGI(TAG, "mode override requested; no alternative profile in this image");
-        return;
+    if (info->index == HEADSET_BTN_ACTION) {
+        if (evt == BUTTONS_EVENT_LONG_PRESS) {
+            xTaskNotify(s_hs.main_task, REQ_OVERRIDE, eSetBits);
+            return;
+        }
+        if (evt == BUTTONS_EVENT_PRESSED && s_hs.mode == MODE_IDLE) {
+            xTaskNotify(s_hs.main_task, REQ_WAKE_LINK, eSetBits);
+            return;
+        }
     }
 
-    if (s_hs.active != NULL && s_hs.active->on_button != NULL) {
-        s_hs.active->on_button(evt, info, s_hs.active->ctx);
+    const headset_profile_t *active = s_hs.active;
+    if (active != NULL && active->on_button != NULL) {
+        active->on_button(evt, info, active->ctx);
     }
 }
 
@@ -163,18 +217,31 @@ static void optional(esp_err_t err, const char *what)
     }
 }
 
+static size_t ring_bytes(uint32_t rate_hz, uint32_t channels, uint32_t ms)
+{
+    return (size_t)rate_hz * channels * 2u / 1000u * ms;
+}
+
 static esp_err_t rings_init(void)
 {
-    /* Sized in milliseconds of the speaker format, which is the ring that matters:
-     * it is the elastic buffer the feedback servo regulates (ADR-021). It must
-     * exceed CONFIG_USB_AUDIO_SPEAKER_TARGET_MS plus a packet or usb_audio_init()
-     * refuses it (FW-AUD-059).
+    /* One playback ring serves every profile, sized for the most demanding. Each
+     * size is milliseconds of that profile's speaker format:
+     *  - usound: the elastic buffer the USB feedback servo regulates (ADR-021). It
+     *    must exceed CONFIG_USB_AUDIO_SPEAKER_TARGET_MS plus a packet or
+     *    usb_audio_init() refuses it (FW-AUD-059).
+     *  - wlink: the servo setpoint of the dongle's path plus radio bursts (ADR-022).
      *
-     * Internal RAM, not PSRAM: this is on the 1 ms USB path, and ADR-014 keeps
+     * Internal RAM, not PSRAM: this is on the audio hot path, and ADR-014 keeps
      * PSRAM off hot paths. */
-    const size_t bytes_per_ms = (size_t)CONFIG_USOUND_SPEAKER_SAMPLE_RATE_HZ
-                              * CONFIG_USOUND_SPEAKER_CHANNELS * 2u / 1000u;
-    const size_t capacity = bytes_per_ms * CONFIG_USOUND_PLAYBACK_RING_MS;
+    size_t capacity = ring_bytes(CONFIG_USOUND_SPEAKER_SAMPLE_RATE_HZ, CONFIG_USOUND_SPEAKER_CHANNELS,
+                                 CONFIG_USOUND_PLAYBACK_RING_MS);
+#if CONFIG_HEADSET_ENABLE_WIRELESS
+    size_t wl = ring_bytes(CONFIG_WLINK_SPEAKER_SAMPLE_RATE_HZ, CONFIG_WLINK_SPEAKER_CHANNELS,
+                           CONFIG_WLINK_PLAYBACK_RING_MS);
+    if (wl > capacity) {
+        capacity = wl;
+    }
+#endif
 
     s_hs.playback_storage = heap_caps_malloc(capacity, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (s_hs.playback_storage == NULL) {
@@ -189,14 +256,14 @@ static esp_err_t rings_init(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "playback ring %u B (%d ms at %d Hz x%d)", (unsigned)capacity,
-             CONFIG_USOUND_PLAYBACK_RING_MS, CONFIG_USOUND_SPEAKER_SAMPLE_RATE_HZ,
-             CONFIG_USOUND_SPEAKER_CHANNELS);
+    ESP_LOGI(TAG, "playback ring %u B", (unsigned)capacity);
     return ESP_OK;
 }
 
 void app_main(void)
 {
+    s_hs.main_task = xTaskGetCurrentTaskHandle();
+
     /* --- Platform: mandatory --------------------------------------------- */
     mandatory(cfg_init(), "cfg_init");
     diag_config_t diag_cfg = { .fault_cb = on_fault };
@@ -235,26 +302,42 @@ void app_main(void)
     }
 
     /* --- Mode state machine ---------------------------------------------- */
+    s_hs.idle_since_us = esp_timer_get_time();
 #if CONFIG_HEADSET_ENABLE_USB
-    /* Phase 1 has one transport and the board is bus-powered, so "USB available"
-     * is true at boot. Phase 2 replaces this with a VBUS check and a dongle-link
-     * check, and the arbitration below is where "wired wins" will live. */
-    mode_enter(MODE_USOUND, usound_profile());
-#else
-    ESP_LOGW(TAG, "USB disabled (CONFIG_HEADSET_ENABLE_USB=n): "
-                  "USB-Serial/JTAG console preserved, staying IDLE");
+    /* The board is bus-powered, so "USB available" is true at boot. VBUS detection
+     * replaces this when the battery board exists; "wired wins" lives here. */
+    mode_enter(MODE_USOUND);
+#endif
+#if CONFIG_HEADSET_ENABLE_WIRELESS
+    if (s_hs.mode == MODE_IDLE) {
+        mode_enter(MODE_WIRELESS);
+    }
+#endif
+#if !CONFIG_HEADSET_ENABLE_USB && !CONFIG_HEADSET_ENABLE_WIRELESS
+    ESP_LOGW(TAG, "no profile enabled (HEADSET_ENABLE_USB=n, HEADSET_ENABLE_WIRELESS=n): staying IDLE");
 #endif
 
-    /* The mode task. It polls rather than waits on an event group because the
-     * only Phase 1 trigger — the host going away — has no event of its own until
-     * usb_device grows one. One second is far below human notice for a transport
-     * change and costs nothing. */
+    /* The mode task. It wakes on a posted request or once a second, which is far
+     * below human notice for a transport change: the only other triggers — the
+     * host or the dongle going away — have no event of their own yet. */
     while (true) {
+        uint32_t req = 0;
+        (void)xTaskNotifyWait(0, UINT32_MAX, &req, pdMS_TO_TICKS(1000));
+        handle_requests(req);
+
         if (s_hs.active != NULL && s_hs.active->is_live != NULL
             && !s_hs.active->is_live(s_hs.active->ctx)) {
             ESP_LOGI(TAG, "%s transport gone", s_hs.active->name);
-            mode_enter(MODE_IDLE, NULL);
+            mode_enter(MODE_IDLE);
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+#if CONFIG_HEADSET_ENABLE_WIRELESS
+        if (s_hs.mode == MODE_IDLE &&
+            esp_timer_get_time() - s_hs.idle_since_us >= (int64_t)CONFIG_HEADSET_WIRELESS_RETRY_S * 1000000) {
+            mode_enter(MODE_WIRELESS);
+            if (s_hs.mode == MODE_IDLE) {
+                s_hs.idle_since_us = esp_timer_get_time();   /* failed: wait a full period */
+            }
+        }
+#endif
     }
 }

@@ -47,6 +47,14 @@ CONFIG_POWER_MAX_FREQ_MHZ=240
 CONFIG_POWER_MIN_FREQ_MHZ=80
 
 # ---------------------------------------------------------------------------
+# Caches: 32 KiB instruction, 64 KiB data (defaults 16/32). libopus runs from flash,
+# and the larger caches cut the codec's time per frame by 13 % (encode) and 27 %
+# (decode), measured on target 2026-09-26. Costs 48 KiB of internal SRAM.
+# ---------------------------------------------------------------------------
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+
+# ---------------------------------------------------------------------------
 # FreeRTOS: 1 kHz tick (ADR-010). Deadline paths still never use the tick (TM1).
 # ---------------------------------------------------------------------------
 CONFIG_FREERTOS_HZ=1000
@@ -70,14 +78,30 @@ CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 CONFIG_LOG_DYNAMIC_LEVEL_CONTROL=y
 
 # ---------------------------------------------------------------------------
-# Radios: off for Phase 1.
+# Radio: Bluetooth LE for the wlink profile (ADR-022); Wi-Fi off.
 #
-# `usound` is the wired baseline that Phases 2 and 3 get measured against, and it
-# needs neither. Leaving Bluedroid and Wi-Fi out keeps the DRAM the duplex audio
-# path competes for (SDD §13.2) and keeps MINIMAL_BUILD honest. Phase 2 turns
-# CONFIG_BT_ENABLED back on together with its ADR.
+# Bluedroid, LE only, on the BLE 5.0 API set (ADR-023) for the 2M PHY. The headset
+# is the peripheral and GATT server, so no GATT client, no scanning, no periodic
+# advertising. Bonds in NVS: the link requires encryption (AUDIO_LINK_REQUIRE_ENCRYPTION).
+# Wi-Fi stays out: one radio, and the software coexistence it would need glitches a
+# continuous audio stream (ADR-022 consequences).
 # ---------------------------------------------------------------------------
-CONFIG_BT_ENABLED=n
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_CLASSIC_ENABLED=n
+CONFIG_BT_GATTS_ENABLE=y
+CONFIG_BT_GATTC_ENABLE=n
+CONFIG_BT_SMP_ENABLE=y
+CONFIG_BT_BLE_SMP_BOND_NVS_FLASH=y
+CONFIG_BT_BLUEDROID_PINNED_TO_CORE_0=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=n
+CONFIG_BT_BLE_50_EXTEND_ADV_EN=y
+CONFIG_BT_BLE_50_PERIODIC_ADV_EN=n
+CONFIG_BT_BLE_50_EXTEND_SCAN_EN=n
+CONFIG_BT_BLE_50_EXTEND_SYNC_EN=n
+CONFIG_BT_BLE_50_DTM_TEST_EN=n
 CONFIG_ESP_WIFI_ENABLED=n
 
 # ---------------------------------------------------------------------------

@@ -192,10 +192,10 @@ static esp_err_t usound_start(const headset_profile_resources_t *res, void *ctx)
         .bits_per_sample = 16,
         .slot            = AUDIO_PLAYBACK_SLOT_BOTH,
         .port            = -1,
-        .pins = { .bclk = CONFIG_USOUND_SPK_PIN_BCLK,
-                  .ws   = CONFIG_USOUND_SPK_PIN_WS,
-                  .dout = CONFIG_USOUND_SPK_PIN_DOUT,
-                  .mclk = CONFIG_USOUND_SPK_PIN_MCLK },
+        .pins = { .bclk = CONFIG_HEADSET_SPK_PIN_BCLK,
+                  .ws   = CONFIG_HEADSET_SPK_PIN_WS,
+                  .dout = CONFIG_HEADSET_SPK_PIN_DOUT,
+                  .mclk = CONFIG_HEADSET_SPK_PIN_MCLK },
     };
     err = audio_playback_init(&pb);
     if (err != ESP_OK) {
@@ -207,15 +207,15 @@ static esp_err_t usound_start(const headset_profile_resources_t *res, void *ctx)
     /* --- Microphone path: optional --------------------------------------- */
     if (res->mic_ring != NULL) {
         const audio_capture_config_t cap = {
-            .interface       = CONFIG_USOUND_MIC_PDM ? AUDIO_CAPTURE_IF_PDM
+            .interface       = CONFIG_HEADSET_MIC_PDM ? AUDIO_CAPTURE_IF_PDM
                                                      : AUDIO_CAPTURE_IF_I2S_STD,
             .sample_rate_hz  = CONFIG_USOUND_MIC_SAMPLE_RATE_HZ,
             .channels        = 1,
             .bits_per_sample = 16,
             .slot            = AUDIO_CAPTURE_SLOT_LEFT,
-            .pins = { .clk  = CONFIG_USOUND_MIC_PIN_CLK,
-                      .ws   = CONFIG_USOUND_MIC_PIN_WS,
-                      .din  = CONFIG_USOUND_MIC_PIN_DIN,
+            .pins = { .clk  = CONFIG_HEADSET_MIC_PIN_CLK,
+                      .ws   = CONFIG_HEADSET_MIC_PIN_WS,
+                      .din  = CONFIG_HEADSET_MIC_PIN_DIN,
                       .mclk = -1 },
         };
         err = audio_capture_init(&cap);

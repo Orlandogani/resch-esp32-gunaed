@@ -1,0 +1,60 @@
+menu "Profile: wlink (wireless link to the dongle)"
+
+    config WLINK_DEVICE_NAME
+        string "Advertised BLE name"
+        default "esp32s3-headset"
+        help
+            What a scanner shows. The dongle does not match on it — it matches on
+            the audio link service UUID — so this is for people and phones.
+
+    config WLINK_SPEAKER_SAMPLE_RATE_HZ
+        int "Downlink (speaker) sample rate (Hz)"
+        default 48000
+        help
+            Must equal the dongle's DONGLE_SPEAKER_SAMPLE_RATE_HZ: it is part of
+            the format code every audio frame carries, and frames in another
+            format are dropped and reported (FW-LNK-019). 8000, 12000, 16000,
+            24000 or 48000 (the rates Opus codes natively).
+
+    config WLINK_SPEAKER_CHANNELS
+        int "Downlink (speaker) channels"
+        default 2
+        range 1 2
+
+    config WLINK_MIC_SAMPLE_RATE_HZ
+        int "Uplink (microphone) sample rate (Hz)"
+        default 16000
+        help
+            Must equal the dongle's DONGLE_MIC_SAMPLE_RATE_HZ. Mono.
+
+    config WLINK_PLAYBACK_RING_MS
+        int "Playback ring capacity (ms of audio)"
+        default 120
+        range 40 500
+        help
+            The elastic buffer between the radio and the I2S clock. It holds the
+            servo's setpoint (the dongle's DONGLE_PATH_TARGET_MS, most of which
+            sits here) plus the retransmission bursts the link delivers after a
+            fade. main/ sizes the one playback ring for the larger of this and
+            USOUND_PLAYBACK_RING_MS. 120 ms at 48 kHz stereo is 23040 bytes of
+            internal RAM.
+
+    config WLINK_STATS_PERIOD_S
+        int "Log link and playback counters every (s); 0 = never"
+        default 5
+        range 0 3600
+        help
+            One console line per period with the link's and the playback driver's
+            counters — the headset half of a two-board soak (scripts/link_soak.py).
+
+    config WLINK_RECONNECT_GRACE_S
+        int "Keep advertising after the dongle is lost for (s)"
+        default 20
+        range 1 600
+        help
+            While the link is down the profile keeps the radio up and
+            advertising for this long before reporting itself not live, which
+            lets main/ drop to IDLE and release the stream lock. A dongle that
+            comes back within the window reconnects without a mode change.
+
+endmenu

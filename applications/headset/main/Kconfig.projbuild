@@ -14,6 +14,29 @@ menu "Application (headset)"
             y. Leave it n while developing over USJ, and turn it on only with
             someone at the board or once TBD-009 (the UART console bridge) closes.
 
+    config HEADSET_ENABLE_WIRELESS
+        bool "Compile the wireless (wlink) profile and enter it when USB is not in use"
+        default y
+        help
+            The Phase 2 profile: duplex audio to the dongle over subsys/audio_link
+            (BLE 2M PHY + Opus, ADR-022). Unlike usound it leaves the
+            USB-Serial/JTAG console alone, so an image with only this enabled is
+            safe to flash remotely. Needs CONFIG_BT_ENABLED.
+
+            With both profiles compiled, USB wins at boot and a long press of the
+            action button switches between them.
+
+    config HEADSET_WIRELESS_RETRY_S
+        int "Re-enter WIRELESS from IDLE after (s)"
+        default 30
+        range 5 3600
+        depends on HEADSET_ENABLE_WIRELESS
+        help
+            After the dongle has been gone longer than the profile's reconnect
+            grace period the headset drops to IDLE, which releases the radio and the
+            stream lock so the device may sleep. It advertises again after this
+            long, or at once on a press of the action button.
+
     menu "Button pins"
 
         config HEADSET_BTN_PIN_VOL_DOWN
@@ -32,6 +55,55 @@ menu "Application (headset)"
                 physically present on an S3 devkit and so the only one that can be
                 exercised before the enclosure exists. It is RTC-capable, so it also
                 serves as the deep-sleep wake source. The other two are placeholders.
+
+    endmenu
+
+    menu "Speaker (I2S TX) pins"
+
+        config HEADSET_SPK_PIN_BCLK
+            int "I2S BCLK"
+            default 15
+
+        config HEADSET_SPK_PIN_WS
+            int "I2S WS / LRCLK"
+            default 16
+
+        config HEADSET_SPK_PIN_DOUT
+            int "I2S DOUT"
+            default 17
+
+        config HEADSET_SPK_PIN_MCLK
+            int "I2S MCLK (-1 if the DAC needs none)"
+            default -1
+            help
+                Board wiring, shared by every profile that plays audio. Which DAC or
+                amplifier part this is remains open (TBD-010), so these four pins
+                are placeholders chosen not to collide with the microphone pins in
+                applications/gunshot-aed. Set them for the real board before
+                trusting a playback measurement.
+
+    endmenu
+
+    menu "Microphone (I2S RX) pins"
+
+        config HEADSET_MIC_PDM
+            bool "Microphone is PDM (else standard I2S)"
+            default y
+
+        config HEADSET_MIC_PIN_CLK
+            int "PDM CLK or I2S BCLK"
+            default 4
+
+        config HEADSET_MIC_PIN_WS
+            int "I2S WS (ignored for PDM)"
+            default 5
+
+        config HEADSET_MIC_PIN_DIN
+            int "Data in"
+            default 6
+            help
+                Same defaults as applications/gunshot-aed, and equally provisional:
+                the microphone part is TBD-002. Shared by every profile.
 
     endmenu
 

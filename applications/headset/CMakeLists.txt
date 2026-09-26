@@ -11,6 +11,8 @@ set(EXTRA_COMPONENT_DIRS
     # purpose: which profile runs, and how it behaves, is headset policy, not
     # reusable SDK mechanism (ADR-013).
     "${CMAKE_CURRENT_LIST_DIR}/profiles"
+    # Policy shared with the dongle: the CONTROL-message vocabulary.
+    "${SDK_ROOT}/applications/common"
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
@@ -20,6 +22,15 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(MINIMAL_BUILD ON)
 
 project(esp32-headset)
+
+# A fresh `idf.py build` with no target set configures for plain esp32, and the failure
+# then surfaces deep in TinyUSB ("MCUs are only supported with CFG_TUH_MAX3421 enabled").
+# Say what is actually wrong, before anything compiles.
+if(NOT IDF_TARGET STREQUAL "esp32s3")
+    message(FATAL_ERROR
+        "headset: configured for '${IDF_TARGET}', but this product is ESP32-S3 only (CON-01). "
+        "Run: idf.py -C applications/headset set-target esp32s3 build")
+endif()
 
 # The console-safety state of this image is not obvious from `idf.py build`, and the
 # difference is one Kconfig value: the safe image and the one that severs the only
@@ -35,7 +46,12 @@ if(CONFIG_HEADSET_ENABLE_USB)
         "alone will NOT bring the port back: recovery is holding BOOT while "
         "replugging to reach ROM download mode. Do not flash this unless you are at "
         "the board (CLAUDE.md hard rule 1, TBD-009).")
+elseif(CONFIG_HEADSET_ENABLE_WIRELESS)
+    message(STATUS
+        "headset: CONFIG_HEADSET_ENABLE_USB=n - console-safe image; boots into the "
+        "wireless (wlink) profile and advertises to the dongle.")
 else()
     message(STATUS
-        "headset: CONFIG_HEADSET_ENABLE_USB=n - console-safe image, stays in IDLE.")
+        "headset: CONFIG_HEADSET_ENABLE_USB=n, CONFIG_HEADSET_ENABLE_WIRELESS=n - "
+        "console-safe image, stays in IDLE.")
 endif()

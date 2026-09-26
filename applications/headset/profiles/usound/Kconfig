@@ -39,52 +39,7 @@ menu "Profile: usound (wired USB headset)"
             that is how much host jitter the ring absorbs before the servo has to
             act. 60 ms at 48 kHz stereo 16-bit is 11520 bytes of internal RAM.
 
-    menu "Speaker (I2S TX) pins"
-
-        config USOUND_SPK_PIN_BCLK
-            int "I2S BCLK"
-            default 15
-
-        config USOUND_SPK_PIN_WS
-            int "I2S WS / LRCLK"
-            default 16
-
-        config USOUND_SPK_PIN_DOUT
-            int "I2S DOUT"
-            default 17
-
-        config USOUND_SPK_PIN_MCLK
-            int "I2S MCLK (-1 if the DAC needs none)"
-            default -1
-            help
-                Which DAC or amplifier part this is remains open (TBD-010), so these
-                four pins are placeholders chosen not to collide with the microphone
-                pins in applications/gunshot-aed. Set them for the real board before
-                trusting a playback measurement.
-
-    endmenu
-
-    menu "Microphone (I2S RX) pins"
-
-        config USOUND_MIC_PDM
-            bool "Microphone is PDM (else standard I2S)"
-            default y
-
-        config USOUND_MIC_PIN_CLK
-            int "PDM CLK or I2S BCLK"
-            default 4
-
-        config USOUND_MIC_PIN_WS
-            int "I2S WS (ignored for PDM)"
-            default 5
-
-        config USOUND_MIC_PIN_DIN
-            int "Data in"
-            default 6
-            help
-                Same defaults as applications/gunshot-aed, and equally provisional:
-                the microphone part is TBD-002.
-
-    endmenu
+    # Speaker and microphone pins are board wiring shared by every profile:
+    # see "Speaker (I2S TX) pins" / "Microphone (I2S RX) pins" in main/Kconfig.projbuild.
 
 endmenu
