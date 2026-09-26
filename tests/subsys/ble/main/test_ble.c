@@ -1,12 +1,15 @@
 /**
- * On-target Unity tests for subsys/ble (Bluedroid).
+ * On-target Unity tests for subsys/ble (Bluedroid, BLE 5.0 API set, ADR-023).
  *
- * Without a central these verify lifecycle, argument validation, service
- * registration, that the asynchronous start sequence completes with real attribute
- * handles, that advertising starts and stops with the sleep lock following it, and
- * that stop/deinit unwind cleanly. Connection, MTU, pairing and notifications need a
- * phone or a second board and are bench items (SDD §16.3).
+ * Without a peer these verify lifecycle, argument validation, service registration,
+ * that the asynchronous start sequence completes with real attribute handles, that
+ * advertising (legacy PDUs over the extended API) and scanning start and stop with
+ * the sleep lock following them and exclude each other, that the central/GATT client
+ * API refuses cleanly without a link, and the advertising-payload UUID helper.
+ * Connection, PHY and data-length updates, MTU, pairing, notifications and writes
+ * need a phone or a second board and are bench items (SDD §16.3).
  */
+#include <stdio.h>
 #include <string.h>
 #include "unity.h"
 #include "freertos/FreeRTOS.h"
@@ -173,6 +176,139 @@ TEST_CASE("start creates the attribute table, advertising toggles the sleep lock
     TEST_ASSERT_EQUAL(ESP_OK, ble_stop());
     TEST_ASSERT_EQUAL(ESP_OK, ble_deinit());
     TEST_ASSERT_TRUE(pm_policy_can_deep_sleep());
+}
+
+static const uint8_t UUID_A[16] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                                     0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10 };
+static const uint8_t UUID_B[16] = { 0xf0, 0xe1, 0xd2, 0xc3, 0xb4, 0xa5, 0x96, 0x87,
+                                     0x78, 0x69, 0x5a, 0x4b, 0x3c, 0x2d, 0x1e, 0x0f };
+
+TEST_CASE("advertising-payload UUID helper matches, rejects and never overreads", "[ble]")
+{
+    uint8_t adv[40];
+    size_t n = 0;
+    adv[n++] = 2; adv[n++] = 0x01; adv[n++] = 0x06;           /* flags */
+    adv[n++] = 17; adv[n++] = 0x07;                            /* complete 128-bit list */
+    memcpy(&adv[n], UUID_A, 16); n += 16;
+    TEST_ASSERT_TRUE(ble_adv_has_uuid128(adv, n, UUID_A));
+    TEST_ASSERT_FALSE(ble_adv_has_uuid128(adv, n, UUID_B));
+
+    /* An incomplete list with two entries: the second one matches. */
+    uint8_t two[36];
+    two[0] = 33; two[1] = 0x06;
+    memcpy(&two[2], UUID_A, 16);
+    memcpy(&two[18], UUID_B, 16);
+    TEST_ASSERT_TRUE(ble_adv_has_uuid128(two, 34, UUID_B));
+
+    /* Truncated: the field claims more than the buffer holds. */
+    TEST_ASSERT_FALSE(ble_adv_has_uuid128(adv, n - 1, UUID_A));
+    /* Zero-length field (padding) ends the walk. */
+    uint8_t pad[4] = { 0, 0, 0, 0 };
+    TEST_ASSERT_FALSE(ble_adv_has_uuid128(pad, sizeof(pad), UUID_A));
+    TEST_ASSERT_FALSE(ble_adv_has_uuid128(NULL, 10, UUID_A));
+    TEST_ASSERT_FALSE(ble_adv_has_uuid128(adv, n, NULL));
+}
+
+TEST_CASE("central and GATT client calls refuse cleanly without a link", "[ble]")
+{
+    fresh();
+    ble_config_t c = { .device_name = "sdk-test" };
+    TEST_ASSERT_EQUAL(ESP_OK, ble_init(&c));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, ble_scan_start(0));        /* not started */
+    uint8_t peer[6] = { 1, 2, 3, 4, 5, 6 };
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, ble_connect(NULL, 0, NULL));
+
+    TEST_ASSERT_EQUAL(ESP_OK, ble_start());
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, ble_gattc_discover(NULL));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, ble_gattc_discover(UUID_A));
+    uint16_t h = 0;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, ble_gattc_find_char(UUID_A, &h));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, ble_gattc_subscribe(0));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, ble_gattc_subscribe(5));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, ble_gattc_write(5, "x", 1, false));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, ble_conn_params_request(NULL));
+
+    /* Out-of-range parameters are refused before any radio work. */
+    ble_conn_params_t bad = { .interval_min_1250us = 5 };
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, ble_connect(peer, 0, &bad));
+    ble_conn_params_t tight = { .interval_min_1250us = 80, .interval_max_1250us = 80,
+                                .latency = 4, .timeout_ms = 500 };   /* 500 ms < 2*5*100 ms */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, ble_connect(peer, 0, &tight));
+
+    ble_status_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, ble_status(&st));
+    TEST_ASSERT_EQUAL(BLE_ROLE_NONE, st.role);
+    TEST_ASSERT_FALSE(st.discovered);
+    TEST_ASSERT_EQUAL(ESP_OK, ble_stop());
+    TEST_ASSERT_EQUAL(ESP_OK, ble_deinit());
+}
+
+static int s_scan_results;
+static int s_scan_stopped;
+static void on_scan_evt(ble_event_t evt, const ble_event_info_t *info, void *ctx)
+{
+    if (evt == BLE_EVT_SCAN_RESULT) {
+        s_scan_results++;
+    } else if (evt == BLE_EVT_SCAN_STOPPED) {
+        s_scan_stopped++;
+    }
+}
+
+TEST_CASE("scanning holds the sleep lock, excludes advertising, and stops on request or timeout", "[ble]")
+{
+    fresh();
+    s_scan_results = 0;
+    s_scan_stopped = 0;
+    ble_config_t c = { .device_name = "sdk-test", .cb = on_scan_evt };
+    TEST_ASSERT_EQUAL(ESP_OK, ble_init(&c));
+    TEST_ASSERT_EQUAL(ESP_OK, ble_start());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ble_scan_start(0));
+    TEST_ASSERT_EQUAL(ESP_OK, ble_scan_start(0));                  /* idempotent */
+    ble_status_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, ble_status(&st));
+    TEST_ASSERT_TRUE(st.scanning);
+    TEST_ASSERT_FALSE(pm_policy_can_deep_sleep());
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, ble_adv_start());     /* one radio role at a time */
+
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    printf("advertisers seen in 1.5 s: %d\n", s_scan_results);    /* environment-dependent */
+
+    TEST_ASSERT_EQUAL(ESP_OK, ble_scan_stop());
+    TEST_ASSERT_EQUAL(ESP_OK, ble_status(&st));
+    TEST_ASSERT_FALSE(st.scanning);
+    TEST_ASSERT_TRUE(pm_policy_can_deep_sleep());
+    TEST_ASSERT_EQUAL(1, s_scan_stopped);
+
+    /* A timed scan ends by itself and releases the lock. */
+    TEST_ASSERT_EQUAL(ESP_OK, ble_scan_start(300));
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    TEST_ASSERT_EQUAL(ESP_OK, ble_status(&st));
+    TEST_ASSERT_FALSE(st.scanning);
+    TEST_ASSERT_TRUE(pm_policy_can_deep_sleep());
+    TEST_ASSERT_EQUAL(2, s_scan_stopped);
+
+    TEST_ASSERT_EQUAL(ESP_OK, ble_stop());
+    TEST_ASSERT_EQUAL(ESP_OK, ble_deinit());
+}
+
+TEST_CASE("advertising a 128-bit service UUID with a long name starts and stops", "[ble]")
+{
+    fresh();
+    /* flags (3) + UUID (18) leave 10 bytes: the name is shortened in the
+     * advertisement and complete in the scan response. */
+    ble_config_t c = { .device_name = "sdk-test-headset-long", .adv_uuid128 = UUID_A };
+    TEST_ASSERT_EQUAL(ESP_OK, ble_init(&c));
+    TEST_ASSERT_EQUAL(ESP_OK, ble_start());
+    TEST_ASSERT_EQUAL(ESP_OK, ble_adv_start());
+    ble_status_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, ble_status(&st));
+    TEST_ASSERT_TRUE(st.advertising);
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, ble_scan_start(0));  /* advertising excludes scanning */
+    vTaskDelay(pdMS_TO_TICKS(300));
+    TEST_ASSERT_EQUAL(ESP_OK, ble_adv_stop());
+    TEST_ASSERT_EQUAL(ESP_OK, ble_stop());
+    TEST_ASSERT_EQUAL(ESP_OK, ble_deinit());
 }
 
 TEST_CASE("init/deinit cycle is repeatable without leaking", "[ble]")

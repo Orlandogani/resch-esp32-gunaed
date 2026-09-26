@@ -5,7 +5,9 @@ menu "BLE (subsys/ble)"
         default "esp32s3-sdk"
         help
             Used when ble_config_t.device_name is NULL. At most 29 bytes so that the
-            complete name and the flags fit one 31-byte advertising PDU.
+            complete name and the flags fit one 31-byte advertising PDU. With an
+            advertised 128-bit service UUID the advertisement carries a shortened
+            name and the scan response the complete one.
 
     config BLE_ADV_INTERVAL_MS
         int "Default minimum advertising interval (ms)"
@@ -21,16 +23,72 @@ menu "BLE (subsys/ble)"
         range 1 8
 
     config BLE_LOCAL_MTU
-        int "Local ATT MTU offered to the central"
+        int "Local ATT MTU offered to the peer"
         default 247
         range 23 517
         help
-            The negotiated MTU is the smaller of this and the central's. 247 is
-            the common phone maximum; notifications carry MTU - 3 bytes.
+            The negotiated MTU is the smaller of this and the peer's. 247 is the
+            common phone maximum; notifications and writes carry MTU - 3 bytes.
 
     config BLE_START_TIMEOUT_MS
         int "Timeout for each step of the asynchronous start sequence (ms)"
         default 2000
         range 500 10000
+
+    config BLE_PREFER_2M_PHY
+        bool "Request the LE 2M PHY on every new link"
+        default y
+        help
+            Halves the airtime of every packet, which is what makes a continuous
+            audio stream affordable in radio-on time (ADR-022, ADR-023). A peer that
+            does not support 2M simply stays on 1M; the outcome is reported as
+            BLE_EVT_PHY_UPDATED. Turning it off keeps every link on 1M.
+
+    config BLE_DATA_LEN
+        int "LL data length requested on every new link (octets)"
+        default 251
+        range 27 251
+        help
+            Data Length Extension: 251 lets one link-layer packet carry a whole
+            ATT payload of up to 244 bytes instead of fragmenting it into 27-byte
+            pieces. 27 disables the request.
+
+    config BLE_CONN_INTERVAL_MIN
+        int "Default minimum connection interval (1.25 ms units)"
+        default 24
+        range 6 3200
+        help
+            Used by ble_connect() and ble_conn_params_request() when the caller
+            passes 0. 24 = 30 ms: a general-purpose default. A streaming link asks
+            for its own, shorter interval.
+
+    config BLE_CONN_INTERVAL_MAX
+        int "Default maximum connection interval (1.25 ms units)"
+        default 40
+        range 6 3200
+        help
+            40 = 50 ms. Must be at least BLE_CONN_INTERVAL_MIN.
+
+    config BLE_SUPERVISION_TIMEOUT_MS
+        int "Default supervision timeout (ms)"
+        default 4000
+        range 100 32000
+        help
+            How long a silent link survives before it is declared lost. Shorter
+            detects a lost peer sooner at the cost of dropping a link through a
+            brief fade.
+
+    config BLE_SCAN_INTERVAL_MS
+        int "Scan interval (ms), for scanning and connection creation"
+        default 60
+        range 3 10240
+
+    config BLE_SCAN_WINDOW_MS
+        int "Scan window (ms)"
+        default 30
+        range 3 10240
+        help
+            Must not exceed BLE_SCAN_INTERVAL_MS. Window/interval is the radio's
+            listening duty cycle while scanning.
 
 endmenu

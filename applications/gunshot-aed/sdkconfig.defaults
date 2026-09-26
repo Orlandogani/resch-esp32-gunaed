@@ -86,11 +86,18 @@ CONFIG_BT_GATTS_ENABLE=y
 CONFIG_BT_SMP_ENABLE=y
 CONFIG_BT_BLE_SMP_BOND_NVS_FLASH=y
 CONFIG_BT_BLUEDROID_PINNED_TO_CORE_0=y
-# Legacy advertising API set: reachable by every central. Bluedroid cannot enable
-# both 4.2 and 5.0 API sets at once (ADR-018).
-CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
-CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
-CONFIG_BT_BLE_42_ADV_EN=y
+# BLE 5.0 API set (ADR-023 supersedes ADR-018's API-set choice). Advertising still
+# uses legacy PDUs, so every central — 4.x phones included — still sees it. Bluedroid
+# cannot enable both 4.2 and 5.0 API sets at once. Periodic advertising and sync are
+# unused and left out to save RAM; this product is a peripheral only (no GATTC).
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=n
+CONFIG_BT_BLE_50_EXTEND_ADV_EN=y
+CONFIG_BT_BLE_50_PERIODIC_ADV_EN=n
+CONFIG_BT_BLE_50_EXTEND_SCAN_EN=n
+CONFIG_BT_BLE_50_EXTEND_SYNC_EN=n
+CONFIG_BT_BLE_50_DTM_TEST_EN=n
+CONFIG_BT_GATTC_ENABLE=n
 
 # ---------------------------------------------------------------------------
 # Wi-Fi (subsys/wifi_link) and TLS trust for OTA (SYS-SEC-003, DES-OTA-005)
