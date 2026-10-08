@@ -1,0 +1,20 @@
+# Board: orga_v1 (ADR-025). Board-level configuration only; product settings stay in the
+# application's sdkconfig.defaults (and its boards/orga_v1.defaults).
+#
+# ESP32-S3-WROOM-1-N16R8: 16 MiB flash, 8 MiB octal PSRAM (IO35-37 used by the PSRAM).
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Console on UART0 — the programming pads (TX/RX/EN/IO0/3V3/GND on the bottom side).
+# Unlike the devkit, the USB-C carries the product's own USB device (UAC2 + HID), so the
+# USB-Serial/JTAG is only a secondary console that disappears when TinyUSB starts; UART0
+# survives it (closes TBD-009 for this board).
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# PDM microphones (IM73D122V01) have valid clock bands; at 16 kHz only x128 (2.048 MHz)
+# is inside one. The board also answers board_mic_pdm_oversample() per rate.
+CONFIG_AUDIO_CAPTURE_PDM_OVERSAMPLE_128=y
+
+# Status LED colour balance: red has 470 R, green/blue 68 R near their Vf (TBD-017).
+CONFIG_RGB_LED_GAIN_R=600

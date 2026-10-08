@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.22)
+# ORGA v1 bring-up console: one command per part, for the first powered boards.
+# The board is forced: this project means nothing on any other (ADR-025).
+set(SDK_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../..")
+set(EXTRA_COMPONENT_DIRS "${SDK_ROOT}/subsys" "${SDK_ROOT}/drivers" "${SDK_ROOT}/lib" "${SDK_ROOT}/third_party")
+if(NOT DEFINED SDKCONFIG_DEFAULTS)
+    set(SDKCONFIG_DEFAULTS "${SDK_ROOT}/tests/sdkconfig.common.defaults;${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults")
+endif()
+set(BOARD orga_v1)
+include(${SDK_ROOT}/cmake/board.cmake)
+sdk_board_select(orga_v1)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+sdk_board_bootloader()
+idf_build_set_property(MINIMAL_BUILD ON)
+project(orga_bringup)

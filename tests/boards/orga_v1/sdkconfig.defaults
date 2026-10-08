@@ -1,0 +1,5 @@
+# ORGA v1 bring-up console. The shared test baseline is tests/sdkconfig.common.defaults;
+# the board's own fragment is appended by cmake/board.cmake.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# A REPL waits on the console for minutes at a time.
+CONFIG_ESP_TASK_WDT_EN=n
