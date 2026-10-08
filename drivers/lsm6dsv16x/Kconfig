@@ -1,0 +1,49 @@
+menu "LSM6DSV16X IMU (drivers/lsm6dsv16x)"
+
+    config LSM6DSV16X_I2C_HZ
+        int "Default I2C clock (Hz)"
+        default 400000
+        range 10000 1000000
+
+    config LSM6DSV16X_MOTION_THRESHOLD_MG
+        int "Default motion threshold (mg)"
+        default 62
+        range 16 984
+        help
+            Acceleration change that counts as movement, for both the wake-up and
+            the inactivity detector. 62 mg ignores desk vibration and still sees
+            a head turn. Applied in 15.625 mg steps.
+
+    config LSM6DSV16X_STILL_TIME_S
+        int "Default stillness before 'still' (s)"
+        default 60
+        range 9 128
+        help
+            Quantised to 512/60 s (about 8.5 s) steps by the chip. Longer
+            stillness is the application's timer.
+
+    config LSM6DSV16X_POSE_RATE_HZ
+        int "Default orientation (SFLP) rate (Hz)"
+        default 30
+        help
+            15, 30, 60 or 120. Head tracking for spatial audio is comfortable at
+            30 Hz; every sample costs an I2C read of the FIFO.
+
+    config LSM6DSV16X_TASK_PRIORITY
+        int "IMU task priority"
+        default 7
+        range 1 24
+
+    config LSM6DSV16X_TASK_CORE
+        int "IMU task core affinity"
+        default 0
+        range 0 1
+
+    config LSM6DSV16X_TASK_STACK
+        int "IMU task stack (bytes)"
+        default 3584
+        range 2048 16384
+        help
+            The application callbacks run on this stack.
+
+endmenu

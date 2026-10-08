@@ -1,0 +1,9 @@
+menu "Test: lsm6dsv16x"
+
+    config TEST_ON_ORGA
+        bool "Running on an ORGA v1 board (IMU present)"
+        default n
+        help
+            Runs the [needs_orga] cases, which need the real IMU, and skips the
+            [no_imu] case, which asserts that nothing answers at 0x6A.
+endmenu
