@@ -30,6 +30,21 @@ typedef enum {
      *  1/256 dB, signed, little-endian. Informational: neither side attenuates yet
      *  (applications/headset/docs/design.md, "Open questions"). */
     HLP_MSG_HOST_VOLUME = 0x02,
+
+    /** Headset → dongle. [type][percent][flags]: battery state of charge, 0..100, from
+     *  the open-circuit-voltage table (an estimate, ±10 %). `flags` bit 0 = external
+     *  power present, bit 1 = charging. Sent on change and on link-up. */
+    HLP_MSG_BATTERY = 0x03,
+
+    /** Headset → dongle. [type][worn]: 1 when the IMU sees the headset moving, 0 after
+     *  it has been still for the IMU's still time — a heuristic for "taken off". */
+    HLP_MSG_WEAR = 0x04,
+
+    /** Headset → dongle. [type][w][x][y][z]: head orientation, a unit quaternion (game
+     *  rotation: no magnetometer, so heading drifts slowly), each component int16 Q14
+     *  little-endian (16384 = 1.0). Sent at the IMU's pose rate while worn and linked.
+     *  The dongle forwards it nowhere yet (TBD-014). */
+    HLP_MSG_HEAD_POSE = 0x05,
 } hlp_msg_type_t;
 
 /* Bits of the one-byte consumer-control report, in the order of the dongle's (and
@@ -41,6 +56,12 @@ typedef enum {
 
 #define HLP_BUTTON_LEN      2u
 #define HLP_HOST_VOLUME_LEN 5u
+#define HLP_BATTERY_LEN     3u
+#define HLP_WEAR_LEN        2u
+#define HLP_HEAD_POSE_LEN   9u
+
+#define HLP_BATTERY_EXT_POWER (1u << 0)
+#define HLP_BATTERY_CHARGING  (1u << 1)
 
 #ifdef __cplusplus
 }
