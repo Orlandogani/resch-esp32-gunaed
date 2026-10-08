@@ -1,0 +1,60 @@
+menu "RGB status LED (drivers/rgb_led)"
+
+    config RGB_LED_LEDC_TIMER
+        int "LEDC timer"
+        default 3
+        range 0 3
+        help
+            Owned exclusively by this driver (DR10). Timer 3 leaves 0..2 for
+            anything else that uses LEDC.
+
+    config RGB_LED_LEDC_CHANNEL_BASE
+        int "First of three consecutive LEDC channels (R, G, B)"
+        default 5
+        range 0 5
+        help
+            Channels BASE, BASE+1 and BASE+2 are owned exclusively (DR10). The
+            S3 has eight low-speed channels; 5..7 is the top of the range.
+
+    config RGB_LED_PWM_HZ
+        int "Default PWM frequency (Hz)"
+        default 5000
+        range 100 40000
+        help
+            Above flicker perception and below the range where the duty
+            resolution suffers.
+
+    config RGB_LED_DUTY_BITS
+        int "Duty resolution (bits)"
+        default 10
+        range 8 13
+        help
+            10 bits at 5 kHz needs a 5.12 MHz counter clock, which every LEDC
+            clock source on the S3 provides.
+
+    config RGB_LED_GAMMA
+        bool "Square-law (perceptual) brightness curve"
+        default y
+        help
+            Map an 8-bit level v to v^2/255 of full duty, so equal steps in
+            level look like roughly equal steps in brightness.
+
+    config RGB_LED_GAIN_R
+        int "Default red gain (per mille of full duty)"
+        default 1000
+        range 1 1000
+
+    config RGB_LED_GAIN_G
+        int "Default green gain (per mille of full duty)"
+        default 1000
+        range 1 1000
+
+    config RGB_LED_GAIN_B
+        int "Default blue gain (per mille of full duty)"
+        default 1000
+        range 1 1000
+        help
+            The per-channel gains are the board's colour balance. A config's
+            gain_permille overrides them; boards normally set these.
+
+endmenu
