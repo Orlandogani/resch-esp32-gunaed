@@ -24,6 +24,27 @@ menu "Audio capture (drivers/audio_capture)"
             Must exceed the slowest reader's service period plus USB jitter, or
             that reader is overrun (which it is told about, FW-AUD-006).
 
+    choice AUDIO_CAPTURE_PDM_OVERSAMPLE_CHOICE
+        prompt "Default PDM oversampling (PDM clock = bus rate x this)"
+        default AUDIO_CAPTURE_PDM_OVERSAMPLE_64
+        help
+            The S3's PDM-to-PCM filter decimates by 64 (DSR_8S) or 128 (DSR_16S).
+            Pick the one that puts the PDM clock inside every band the microphone
+            accepts: for an IM73D122 at 16 kHz, 64 gives 1.024 MHz (out of band)
+            and 128 gives 2.048 MHz (in band). A config's pdm_oversample overrides
+            this per input (FW-AUD-071).
+
+        config AUDIO_CAPTURE_PDM_OVERSAMPLE_64
+            bool "64"
+        config AUDIO_CAPTURE_PDM_OVERSAMPLE_128
+            bool "128"
+    endchoice
+
+    config AUDIO_CAPTURE_PDM_OVERSAMPLE
+        int
+        default 128 if AUDIO_CAPTURE_PDM_OVERSAMPLE_128
+        default 64
+
     config AUDIO_CAPTURE_TASK_PRIORITY
         int "Capture task priority"
         default 20

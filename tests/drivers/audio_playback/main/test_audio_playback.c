@@ -490,8 +490,72 @@ TEST_CASE("played bytes reach DOUT: GPIO-matrix loopback into audio_capture", "[
     TEST_ASSERT_EQUAL(ESP_OK, audio_playback_deinit());
 }
 
+TEST_CASE("full duplex on one controller is sample-exact (ADR-026)", "[audio_playback]")
+{
+    fresh();
+
+    /* Playback holds I2S1 TX; capture takes the RX half of the same controller as clock
+     * slave on the same BCLK/WS pins, which ESP-IDF joins into full duplex. Shared clocks
+     * mean the captured samples must equal the played ones exactly - no bit rotation,
+     * which is what the separate-controller loopback above cannot promise (DES-APB-009). */
+    audio_playback_config_t pc = base_cfg();
+    pc.port = 1;
+    TEST_ASSERT_EQUAL(ESP_OK, audio_playback_init(&pc));
+
+    audio_capture_config_t cc = {
+        .interface = AUDIO_CAPTURE_IF_I2S_STD,
+        .sample_rate_hz = RATE_HZ,
+        .channels = 1,
+        .bits_per_sample = 16,
+        .slot = AUDIO_CAPTURE_SLOT_LEFT,
+        .port = AUDIO_CAPTURE_PORT_I2S1,
+        .bus_slave = true,
+        .pins = { .clk = PIN_BCLK, .ws = PIN_WS, .din = PIN_DOUT, .mclk = -1 },
+    };
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_init(&cc));
+    TEST_ASSERT_EQUAL(ESP_OK, gpio_input_enable(PIN_DOUT));
+
+    ringbuf_reader_t r;
+    TEST_ASSERT_EQUAL(ESP_OK, ringbuf_reader_open(audio_capture_get_ring(), &r));
+    feeder_start();
+    TEST_ASSERT_EQUAL(ESP_OK, audio_playback_start());
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_start());
+
+    /* The feeder's byte ramp makes every 16-bit sample (lo, lo + 1). A rotated stream
+     * breaks that relation in nearly every sample; an exact one keeps it in all. */
+    size_t samples = 0, exact = 0;
+    uint8_t buf[256];
+    TickType_t t0 = xTaskGetTickCount();
+    while (xTaskGetTickCount() - t0 < pdMS_TO_TICKS(300)) {
+        size_t got = 0;
+        if (ringbuf_read(&r, buf, sizeof(buf), &got) != ESP_OK || got == 0) {
+            vTaskDelay(1);
+            continue;
+        }
+        for (size_t i = 0; i + 1 < got; i += 2) {
+            uint8_t lo = buf[i], hi = buf[i + 1];
+            if (lo == 0 && hi == 0) {
+                continue;   /* prefill silence */
+            }
+            samples++;
+            if (hi == (uint8_t)(lo + 1)) {
+                exact++;
+            }
+        }
+    }
+    printf("duplex loopback: %u of %u samples exact\n", (unsigned)exact, (unsigned)samples);
+    TEST_ASSERT_TRUE_MESSAGE(samples > 2000, "no audio came back");
+    TEST_ASSERT_TRUE_MESSAGE(exact * 100 >= samples * 99, "samples are not bit-exact");
+
+    feeder_stop();
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_deinit());
+    TEST_ASSERT_EQUAL(ESP_OK, audio_playback_deinit());
+}
+
 void app_main(void)
 {
+    /* Let a USB-Serial/JTAG capture attach first (.claude/BACKLOG.md). */
+    vTaskDelay(pdMS_TO_TICKS(2000));
     UNITY_BEGIN();
     unity_run_all_tests();
     UNITY_END();

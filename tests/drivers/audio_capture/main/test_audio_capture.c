@@ -244,8 +244,121 @@ TEST_CASE("PDM mode initialises and runs", "[audio_capture]")
     TEST_ASSERT_EQUAL(ESP_OK, audio_capture_deinit());
 }
 
+/* ------------------------------------------------------------------------- */
+/* Bus rate, PDM clock band, input switching (FW-AUD-070..075)               */
+/* ------------------------------------------------------------------------- */
+
+TEST_CASE("new options are validated against the interface", "[audio_capture]")
+{
+    fresh();
+    audio_capture_config_t c;
+
+    c = base_cfg(); c.pdm_oversample = 128;            /* PDM-only option on std */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, audio_capture_init(&c));
+    c = base_cfg(); c.interface = AUDIO_CAPTURE_IF_PDM; c.bus_slave = true;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, audio_capture_init(&c));
+    c = base_cfg(); c.interface = AUDIO_CAPTURE_IF_PDM; c.pdm_oversample = 96;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, audio_capture_init(&c));
+    c = base_cfg(); c.decimation = 7;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, audio_capture_init(&c));
+    c = base_cfg(); c.decimation = 3; c.bits_per_sample = 32;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, audio_capture_init(&c));
+    c = base_cfg(); c.sample_rate_hz = 48000; c.decimation = 3;   /* 144 kHz bus */
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, audio_capture_init(&c));
+    c = base_cfg(); c.port = (audio_capture_port_t)3;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, audio_capture_init(&c));
+    TEST_ASSERT_NULL(audio_capture_get_ring());
+}
+
+TEST_CASE("PDM at 16 kHz with 128x oversampling runs at the ring rate", "[audio_capture]")
+{
+    fresh();
+    audio_capture_config_t c = base_cfg();
+    c.interface = AUDIO_CAPTURE_IF_PDM;
+    c.pins.ws = -1;
+    c.port = AUDIO_CAPTURE_PORT_I2S0;     /* PDM RX lives on I2S0 on the S3 */
+    c.pdm_oversample = 128;               /* 2.048 MHz: inside the IM73D122 bands */
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_init(&c));
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_start());
+    vTaskDelay(pdMS_TO_TICKS(500));
+    audio_capture_stats_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_stats(&st));
+    /* 32 B/ms for 500 ms, within a DMA frame or two of scheduling slack. */
+    TEST_ASSERT_UINT64_WITHIN(1600, 16000, st.bytes_captured);
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_deinit());
+}
+
+TEST_CASE("decimation: 48 kHz bus delivers 16 kHz into the ring", "[audio_capture]")
+{
+    fresh();
+    audio_capture_config_t c = base_cfg();
+    c.decimation = 3;
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_init(&c));
+    audio_capture_format_t f;
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_get_format(&f));
+    TEST_ASSERT_EQUAL(16000, f.sample_rate_hz);
+    TEST_ASSERT_EQUAL(32, f.bytes_per_ms);
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_start());
+    vTaskDelay(pdMS_TO_TICKS(500));
+    audio_capture_stats_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_stats(&st));
+    TEST_ASSERT_UINT64_WITHIN(1600, 16000, st.bytes_captured);
+    TEST_ASSERT_EQUAL(0, st.ring_write_failures);
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_deinit());
+}
+
+TEST_CASE("switch_input keeps the ring and its readers across interfaces", "[audio_capture]")
+{
+    fresh();
+    audio_capture_config_t std_cfg = base_cfg();
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_init(&std_cfg));
+    ringbuf_t *ring = audio_capture_get_ring();
+    ringbuf_reader_t r;
+    TEST_ASSERT_EQUAL(ESP_OK, ringbuf_reader_open(ring, &r));
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_start());
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    /* Format changes are refused and leave the input running. */
+    audio_capture_config_t bad = base_cfg();
+    bad.sample_rate_hz = 48000;
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG, audio_capture_switch_input(&bad));
+
+    /* std -> PDM (another controller) -> std with a 3x bus, all while running. */
+    audio_capture_config_t pdm = base_cfg();
+    pdm.interface = AUDIO_CAPTURE_IF_PDM;
+    pdm.pins.ws = -1;
+    pdm.pdm_oversample = 128;
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_switch_input(&pdm));
+    TEST_ASSERT_EQUAL_PTR(ring, audio_capture_get_ring());
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    audio_capture_config_t fast = base_cfg();
+    fast.decimation = 3;
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_switch_input(&fast));
+    TEST_ASSERT_EQUAL_PTR(ring, audio_capture_get_ring());
+
+    size_t before = ringbuf_available(&r);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    TEST_ASSERT_TRUE_MESSAGE(ringbuf_available(&r) > before, "capture stalled after switching");
+
+    audio_capture_stats_t st;
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_stats(&st));
+    TEST_ASSERT_EQUAL(2, st.input_switches);
+    TEST_ASSERT_TRUE(st.running);
+
+    /* Switching while stopped leaves it stopped. */
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_stop());
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_switch_input(&std_cfg));
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_stats(&st));
+    TEST_ASSERT_FALSE(st.running);
+    TEST_ASSERT_EQUAL(ESP_OK, audio_capture_deinit());
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, audio_capture_switch_input(&std_cfg));
+}
+
 void app_main(void)
 {
+    /* Let a USB-Serial/JTAG capture attach first (.claude/BACKLOG.md). */
+    vTaskDelay(pdMS_TO_TICKS(2000));
     UNITY_BEGIN();
     unity_run_all_tests();
     UNITY_END();

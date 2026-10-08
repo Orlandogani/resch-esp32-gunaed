@@ -4,7 +4,7 @@
 idf_component_register(SRCS "audio_capture.c"
                        INCLUDE_DIRS "include"
                        REQUIRES ringbuf
-                       PRIV_REQUIRES esp_driver_i2s pm_policy diag heap)
+                       PRIV_REQUIRES esp_driver_i2s pm_policy diag heap decimator)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/sdk_component.cmake)
 sdk_component_strict()

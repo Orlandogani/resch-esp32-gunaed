@@ -2,11 +2,13 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "driver/i2s_std.h"
 #include "driver/i2s_pdm.h"
+#include "decimator.h"
 #include "diag.h"
 #include "pm_policy.h"
 
@@ -18,8 +20,14 @@ static state_t                  s_state;
 static audio_capture_config_t   s_cfg;
 static audio_capture_format_t   s_fmt;
 static i2s_chan_handle_t        s_chan;
-static size_t                   s_frame_bytes;     /* One DMA descriptor's payload. */
+static size_t                   s_frame_bytes;     /* One DMA descriptor's payload, at the bus rate. */
+static size_t                   s_frame_buf_size;  /* Allocated size of s_frame_buf.  */
 static uint8_t                 *s_frame_buf;       /* Task-side copy of one descriptor. */
+static uint32_t                 s_dma_frame_num;   /* Frames per descriptor, at the bus rate. */
+static uint8_t                  s_dma_desc_num;
+static uint8_t                  s_decim;           /* 1 = none. */
+static decimator_t              s_decimator;       /* Static: ~1.4 KiB, ADR-005.    */
+static SemaphoreHandle_t        s_chan_mutex;      /* Task drain vs. switch/stop (DES-ACAP-009). */
 static uint8_t                 *s_ring_storage;
 static ringbuf_t                s_ring;
 static TaskHandle_t             s_task;
@@ -57,7 +65,9 @@ static void capture_task(void *arg)
     for (;;) {
         /* Woken once per completed DMA descriptor. A count > 1 means we fell behind. */
         uint32_t pending = ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
-        if (s_state != ST_RUNNING) {
+        xSemaphoreTake(s_chan_mutex, portMAX_DELAY);
+        if (s_state != ST_RUNNING || s_chan == NULL) {
+            xSemaphoreGive(s_chan_mutex);
             continue;
         }
 
@@ -83,13 +93,24 @@ static void capture_task(void *arg)
             if (got < s_frame_bytes) {
                 s_stats.short_reads++;
             }
-            if (ringbuf_write(&s_ring, s_frame_buf, got) != ESP_OK) {
-                s_stats.ring_write_failures++;
-            } else {
-                s_stats.bytes_captured += got;
+            size_t out_bytes = got;
+            if (s_decim > 1) {
+                /* In place: lib/decimator never overtakes its input (DES-ACAP-008). */
+                const size_t frame = (size_t)s_cfg.channels * 2u;
+                size_t frames = decimator_process(&s_decimator, (const int16_t *)s_frame_buf,
+                                                  got / frame, (int16_t *)s_frame_buf);
+                out_bytes = frames * frame;
+            }
+            if (out_bytes > 0) {
+                if (ringbuf_write(&s_ring, s_frame_buf, out_bytes) != ESP_OK) {
+                    s_stats.ring_write_failures++;
+                } else {
+                    s_stats.bytes_captured += out_bytes;
+                }
             }
             s_stats.dma_frames++;
         }
+        xSemaphoreGive(s_chan_mutex);
 
         /* Cheap enough per frame, and the number the SDD §13.2 budget asks for. */
         UBaseType_t hw = uxTaskGetStackHighWaterMark(NULL);
@@ -128,6 +149,31 @@ static esp_err_t validate(const audio_capture_config_t *cfg)
     if (cfg->interface == AUDIO_CAPTURE_IF_I2S_STD && cfg->pins.ws < 0) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (cfg->port > AUDIO_CAPTURE_PORT_I2S1 || cfg->slot > AUDIO_CAPTURE_SLOT_RIGHT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    /* Options that only mean something on one interface are refused on the other, so a
+     * mistaken board description fails loudly instead of being silently ignored. */
+    if (cfg->interface == AUDIO_CAPTURE_IF_PDM) {
+        if (cfg->bus_slave) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (cfg->pdm_oversample != 0 && cfg->pdm_oversample != 64 && cfg->pdm_oversample != 128) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    } else if (cfg->pdm_oversample != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (cfg->decimation > DECIMATOR_MAX_FACTOR) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (cfg->decimation > 1 && cfg->bits_per_sample != 16) {
+        return ESP_ERR_INVALID_ARG;   /* lib/decimator is int16 (FW-AUD-072). */
+    }
+    uint32_t bus_rate = cfg->sample_rate_hz * (cfg->decimation > 1 ? cfg->decimation : 1u);
+    if (bus_rate > 96000) {
+        return ESP_ERR_INVALID_ARG;
+    }
     uint8_t frames = cfg->dma_frame_count ? cfg->dma_frame_count : CONFIG_AUDIO_CAPTURE_DMA_FRAME_COUNT;
     if (frames < 2) {
         return ESP_ERR_INVALID_ARG; /* FW-AUD-002: double-buffering minimum. */
@@ -135,24 +181,51 @@ static esp_err_t validate(const audio_capture_config_t *cfg)
     return ESP_OK;
 }
 
-static esp_err_t init_channel(uint32_t dma_frame_num, uint32_t dma_desc_num)
+static int port_of(audio_capture_port_t p)
 {
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
-    chan_cfg.dma_desc_num = dma_desc_num;
-    chan_cfg.dma_frame_num = dma_frame_num;
+    switch (p) {
+    case AUDIO_CAPTURE_PORT_I2S0: return I2S_NUM_0;
+    case AUDIO_CAPTURE_PORT_I2S1: return I2S_NUM_1;
+    default:                      return I2S_NUM_AUTO;
+    }
+}
+
+/* Derived geometry for `cfg`: bus decimation, frames and bytes per DMA descriptor. */
+static void geometry(const audio_capture_config_t *cfg, uint8_t *decim, uint32_t *frame_num, size_t *frame_bytes)
+{
+    uint8_t frame_ms = cfg->dma_frame_ms ? cfg->dma_frame_ms : CONFIG_AUDIO_CAPTURE_DMA_FRAME_MS;
+    uint8_t bytes = (cfg->bits_per_sample == 16) ? 2 : 4;
+    *decim = (cfg->decimation > 1) ? cfg->decimation : 1;
+    uint32_t bus_rate = cfg->sample_rate_hz * *decim;
+    *frame_num = (bus_rate * frame_ms) / 1000;
+    *frame_bytes = (size_t)*frame_num * cfg->channels * bytes;
+}
+
+/* Creates s_chan from s_cfg with the geometry in s_dma_frame_num / s_dma_desc_num.
+ * Called with s_chan_mutex held, or before the task exists. */
+static esp_err_t init_channel(void)
+{
+    const bool slave = (s_cfg.interface == AUDIO_CAPTURE_IF_I2S_STD) && s_cfg.bus_slave;
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(port_of(s_cfg.port),
+                                                            slave ? I2S_ROLE_SLAVE : I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num = s_dma_desc_num;
+    chan_cfg.dma_frame_num = s_dma_frame_num;
     chan_cfg.auto_clear = false;
 
     esp_err_t err = i2s_new_channel(&chan_cfg, NULL, &s_chan);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "i2s_new_channel: %s", esp_err_to_name(err));
+        s_chan = NULL;
         return err;
     }
 
+    const uint32_t bus_rate = s_cfg.sample_rate_hz * s_decim;
     i2s_slot_mode_t mode = (s_cfg.channels == 1) ? I2S_SLOT_MODE_MONO : I2S_SLOT_MODE_STEREO;
 
     if (s_cfg.interface == AUDIO_CAPTURE_IF_PDM) {
+        uint8_t os = s_cfg.pdm_oversample ? s_cfg.pdm_oversample : CONFIG_AUDIO_CAPTURE_PDM_OVERSAMPLE;
         i2s_pdm_rx_config_t pdm_cfg = {
-            .clk_cfg  = I2S_PDM_RX_CLK_DEFAULT_CONFIG(s_cfg.sample_rate_hz),
+            .clk_cfg  = I2S_PDM_RX_CLK_DEFAULT_CONFIG(bus_rate),
             .slot_cfg = I2S_PDM_RX_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, mode),
             .gpio_cfg = {
                 .clk = s_cfg.pins.clk,
@@ -160,15 +233,25 @@ static esp_err_t init_channel(uint32_t dma_frame_num, uint32_t dma_desc_num)
                 .invert_flags = { .clk_inv = false },
             },
         };
+        /* PDM clock = bus rate x 64 (DSR_8S) or x 128 (DSR_16S) on the S3 (DES-ACAP-011). */
+        pdm_cfg.clk_cfg.dn_sample_mode = (os == 128) ? I2S_PDM_DSR_16S : I2S_PDM_DSR_8S;
+        if (mode == I2S_SLOT_MODE_MONO) {
+            pdm_cfg.slot_cfg.slot_mask = (s_cfg.slot == AUDIO_CAPTURE_SLOT_RIGHT) ? I2S_PDM_SLOT_RIGHT
+                                                                                 : I2S_PDM_SLOT_LEFT;
+        }
         err = i2s_channel_init_pdm_rx_mode(s_chan, &pdm_cfg);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "PDM clock %u Hz", (unsigned)(bus_rate * os));
+        }
     } else {
         i2s_data_bit_width_t width = (s_cfg.bits_per_sample == 16) ? I2S_DATA_BIT_WIDTH_16BIT
                                                                    : I2S_DATA_BIT_WIDTH_32BIT;
         i2s_std_config_t std_cfg = {
-            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(s_cfg.sample_rate_hz),
+            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(bus_rate),
             .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(width, mode),
             .gpio_cfg = {
-                .mclk = (s_cfg.pins.mclk >= 0) ? s_cfg.pins.mclk : I2S_GPIO_UNUSED,
+                /* A slave never drives MCLK: whoever masters the bus does (ADR-026). */
+                .mclk = (!slave && s_cfg.pins.mclk >= 0) ? s_cfg.pins.mclk : I2S_GPIO_UNUSED,
                 .bclk = s_cfg.pins.clk,
                 .ws   = s_cfg.pins.ws,
                 .dout = I2S_GPIO_UNUSED,
@@ -200,8 +283,12 @@ static esp_err_t init_channel(uint32_t dma_frame_num, uint32_t dma_desc_num)
         ESP_LOGE(TAG, "register callbacks: %s", esp_err_to_name(err));
         i2s_del_channel(s_chan);
         s_chan = NULL;
+        return err;
     }
-    return err;
+    if (s_decim > 1) {
+        (void)decimator_init(&s_decimator, s_decim, s_cfg.channels);
+    }
+    return ESP_OK;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -222,6 +309,7 @@ esp_err_t audio_capture_init(const audio_capture_config_t *cfg)
     uint8_t  frame_ms   = cfg->dma_frame_ms ? cfg->dma_frame_ms : CONFIG_AUDIO_CAPTURE_DMA_FRAME_MS;
     uint8_t  frame_cnt  = cfg->dma_frame_count ? cfg->dma_frame_count : CONFIG_AUDIO_CAPTURE_DMA_FRAME_COUNT;
     uint16_t ring_ms    = cfg->ring_ms ? cfg->ring_ms : CONFIG_AUDIO_CAPTURE_RING_MS;
+    s_dma_desc_num = frame_cnt;
 
     /* ESP-IDF stores 24/32-bit slots in 4 bytes; 16-bit in 2. */
     s_fmt.sample_rate_hz  = cfg->sample_rate_hz;
@@ -230,17 +318,19 @@ esp_err_t audio_capture_init(const audio_capture_config_t *cfg)
     s_fmt.bytes_per_sample = (cfg->bits_per_sample == 16) ? 2 : 4;
     s_fmt.bytes_per_ms    = (uint16_t)((cfg->sample_rate_hz * cfg->channels * s_fmt.bytes_per_sample) / 1000);
 
-    uint32_t dma_frame_num = (cfg->sample_rate_hz * frame_ms) / 1000;   /* frames per descriptor */
-    s_frame_bytes = dma_frame_num * cfg->channels * s_fmt.bytes_per_sample;
+    geometry(cfg, &s_decim, &s_dma_frame_num, &s_frame_bytes);
+    /* The ring holds post-decimation audio, so two of *its* frames is the floor. */
+    size_t ring_frame = s_frame_bytes / s_decim;
     size_t ring_bytes = (size_t)s_fmt.bytes_per_ms * ring_ms;
-    if (ring_bytes < s_frame_bytes * 2) {
+    if (ring_bytes < ring_frame * 2) {
         ESP_LOGW(TAG, "ring (%u B) smaller than two DMA frames (%u B); raising to that",
-                 (unsigned)ring_bytes, (unsigned)(s_frame_bytes * 2));
-        ring_bytes = s_frame_bytes * 2;
+                 (unsigned)ring_bytes, (unsigned)(ring_frame * 2));
+        ring_bytes = ring_frame * 2;
     }
 
     /* Hot-path storage stays in internal SRAM (ADR-014). */
     s_frame_buf = heap_caps_malloc(s_frame_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_frame_buf_size = s_frame_bytes;
     s_ring_storage = heap_caps_malloc(ring_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (s_frame_buf == NULL || s_ring_storage == NULL) {
         ESP_LOGE(TAG, "no internal SRAM for %u B frame + %u B ring", (unsigned)s_frame_bytes, (unsigned)ring_bytes);
@@ -256,8 +346,15 @@ esp_err_t audio_capture_init(const audio_capture_config_t *cfg)
     if (err != ESP_OK) {
         goto fail;
     }
+    if (s_chan_mutex == NULL) {
+        s_chan_mutex = xSemaphoreCreateMutex();   /* Kept across deinit, like s_lock. */
+        if (s_chan_mutex == NULL) {
+            err = ESP_ERR_NO_MEM;
+            goto fail;
+        }
+    }
 
-    err = init_channel(dma_frame_num, frame_cnt);
+    err = init_channel();
     if (err != ESP_OK) {
         goto fail;
     }
@@ -276,9 +373,9 @@ esp_err_t audio_capture_init(const audio_capture_config_t *cfg)
         goto fail;
     }
 
-    ESP_LOGI(TAG, "init: %s %u Hz %uch %u-bit, DMA %u x %u B (%u ms), ring %u B (%u ms), task prio %d core %d",
-             cfg->interface == AUDIO_CAPTURE_IF_PDM ? "PDM" : "I2S",
-             (unsigned)cfg->sample_rate_hz, cfg->channels, cfg->bits_per_sample,
+    ESP_LOGI(TAG, "init: %s%s %u Hz %uch %u-bit (bus x%u), DMA %u x %u B (%u ms), ring %u B (%u ms), task prio %d core %d",
+             cfg->interface == AUDIO_CAPTURE_IF_PDM ? "PDM" : "I2S", cfg->bus_slave ? " slave" : "",
+             (unsigned)cfg->sample_rate_hz, cfg->channels, cfg->bits_per_sample, s_decim,
              frame_cnt, (unsigned)s_frame_bytes, frame_ms, (unsigned)ring_bytes, ring_ms,
              CONFIG_AUDIO_CAPTURE_TASK_PRIORITY, CONFIG_AUDIO_CAPTURE_TASK_CORE);
     return ESP_OK;
@@ -291,6 +388,7 @@ fail:
     heap_caps_free(s_frame_buf);
     heap_caps_free(s_ring_storage);
     s_frame_buf = NULL;
+    s_frame_buf_size = 0;
     s_ring_storage = NULL;
     memset(&s_ring, 0, sizeof(s_ring));
     return err;
@@ -304,9 +402,13 @@ esp_err_t audio_capture_deinit(void)
     audio_capture_stop();
 
     if (s_task != NULL) {
+        /* Delete the task while holding the mutex: a task deleted *inside* its drain would
+         * take the mutex with it and deadlock the next init's stop/switch. */
+        xSemaphoreTake(s_chan_mutex, portMAX_DELAY);
         TaskHandle_t t = s_task;
         s_task = NULL;          /* ISR checks this before notifying. */
         vTaskDelete(t);
+        xSemaphoreGive(s_chan_mutex);
     }
     if (s_chan != NULL) {
         i2s_del_channel(s_chan);
@@ -315,6 +417,7 @@ esp_err_t audio_capture_deinit(void)
     heap_caps_free(s_frame_buf);
     heap_caps_free(s_ring_storage);
     s_frame_buf = NULL;
+    s_frame_buf_size = 0;
     s_ring_storage = NULL;
     memset(&s_ring, 0, sizeof(s_ring));
     s_state = ST_UNINIT;
@@ -325,7 +428,7 @@ esp_err_t audio_capture_deinit(void)
 
 esp_err_t audio_capture_start(void)
 {
-    if (s_state != ST_READY) {
+    if (s_state != ST_READY || s_chan == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
     esp_err_t err = i2s_channel_enable(s_chan);
@@ -346,8 +449,10 @@ esp_err_t audio_capture_stop(void)
     if (s_state != ST_RUNNING) {
         return s_state == ST_UNINIT ? ESP_ERR_INVALID_STATE : ESP_OK;
     }
+    xSemaphoreTake(s_chan_mutex, portMAX_DELAY);
     s_state = ST_READY;
-    esp_err_t err = i2s_channel_disable(s_chan);
+    esp_err_t err = (s_chan != NULL) ? i2s_channel_disable(s_chan) : ESP_OK;
+    xSemaphoreGive(s_chan_mutex);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "i2s_channel_disable: %s", esp_err_to_name(err));
     }
@@ -355,6 +460,82 @@ esp_err_t audio_capture_stop(void)
     pm_policy_lock_release(s_lock);
     s_stats.running = false;
     ESP_LOGI(TAG, "stopped");
+    return err;
+}
+
+esp_err_t audio_capture_switch_input(const audio_capture_config_t *cfg)
+{
+    if (s_state == ST_UNINIT) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = validate(cfg);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (cfg->sample_rate_hz != s_cfg.sample_rate_hz || cfg->channels != s_cfg.channels ||
+        cfg->bits_per_sample != s_cfg.bits_per_sample) {
+        return ESP_ERR_INVALID_ARG;   /* The ring's format is fixed for its lifetime. */
+    }
+
+    uint8_t decim;
+    uint32_t frame_num;
+    size_t frame_bytes;
+    geometry(cfg, &decim, &frame_num, &frame_bytes);
+
+    /* Grow first, so a failed allocation leaves the old input untouched. */
+    uint8_t *grown = NULL;
+    if (frame_bytes > s_frame_buf_size) {
+        grown = heap_caps_malloc(frame_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (grown == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    /* Under the mutex the task is either blocked on its notification or waiting for the
+     * mutex, never inside i2s_channel_read() on the channel being deleted (DES-ACAP-009). */
+    xSemaphoreTake(s_chan_mutex, portMAX_DELAY);
+    const bool was_running = (s_state == ST_RUNNING);
+    if (s_chan != NULL) {
+        if (was_running) {
+            (void)i2s_channel_disable(s_chan);
+        }
+        i2s_del_channel(s_chan);
+        s_chan = NULL;
+    }
+    if (grown != NULL) {
+        heap_caps_free(s_frame_buf);
+        s_frame_buf = grown;
+        s_frame_buf_size = frame_bytes;
+    }
+    s_cfg = *cfg;
+    s_decim = decim;
+    s_dma_frame_num = frame_num;
+    s_frame_bytes = frame_bytes;
+    s_dma_desc_num = cfg->dma_frame_count ? cfg->dma_frame_count : CONFIG_AUDIO_CAPTURE_DMA_FRAME_COUNT;
+
+    err = init_channel();
+    if (err == ESP_OK && was_running) {
+        err = i2s_channel_enable(s_chan);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "i2s_channel_enable: %s", esp_err_to_name(err));
+        }
+    }
+    if (err != ESP_OK && was_running) {
+        /* Running with no usable channel would hold the sleep lock for nothing. */
+        s_state = ST_READY;
+        diag_task_unregister(s_task);
+        pm_policy_lock_release(s_lock);
+        s_stats.running = false;
+    }
+    if (err == ESP_OK) {
+        s_stats.input_switches++;
+    }
+    xSemaphoreGive(s_chan_mutex);
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "input now %s%s, bus x%u", cfg->interface == AUDIO_CAPTURE_IF_PDM ? "PDM" : "I2S",
+                 cfg->bus_slave ? " slave" : "", decim);
+    }
     return err;
 }
 
