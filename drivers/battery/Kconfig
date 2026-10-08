@@ -1,0 +1,50 @@
+menu "Battery monitor (drivers/battery)"
+
+    config BATTERY_SAMPLE_PERIOD_MS
+        int "Default sample period (ms)"
+        default 5000
+        range 100 600000
+        help
+            A cell's voltage moves over minutes; five seconds is responsive to a
+            charger being plugged in (which also wakes the task at once) without
+            spending anything measurable.
+
+    config BATTERY_AVERAGE
+        int "Default moving-average length (samples)"
+        default 8
+        range 1 16
+        help
+            Smooths load transients (a radio burst, the headphone amplifier) out
+            of the reading the state of charge is computed from.
+
+    config BATTERY_ADC_MULTISAMPLE
+        int "Conversions averaged per sample"
+        default 16
+        range 1 64
+
+    config BATTERY_EXT_POWER_SETTLE_MS
+        int "Settle time after a power-good edge (ms)"
+        default 50
+        range 0 1000
+        help
+            A connector being plugged in bounces; the level is read this long
+            after the first edge.
+
+    config BATTERY_TASK_PRIORITY
+        int "Battery task priority"
+        default 5
+        range 1 24
+
+    config BATTERY_TASK_CORE
+        int "Battery task core affinity"
+        default 0
+        range 0 1
+
+    config BATTERY_TASK_STACK
+        int "Battery task stack (bytes)"
+        default 3072
+        range 2048 16384
+        help
+            The application callback runs on this stack.
+
+endmenu
