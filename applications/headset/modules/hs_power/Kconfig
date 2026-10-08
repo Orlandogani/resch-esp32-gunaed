@@ -1,0 +1,41 @@
+menu "Headset: power (modules/hs_power)"
+
+    config HS_POWER_LOW_PERCENT
+        int "Low-battery warning at or below (%)"
+        default 10
+        range 1 50
+
+    config HS_POWER_CRITICAL_MV
+        int "Power off on battery at or below (mV)"
+        default 3400
+        range 3000 3700
+        help
+            Above the BQ24074's and the cell's own protection, so the headset
+            switches itself off cleanly (audio muted, LED shown) before brown-out
+            does it noisily. The TPS63001 buck-boost holds 3.3 V well below this.
+
+    config HS_POWER_FULL_MV
+        int "With external power, treat the cell as full at or above (mV)"
+        default 4150
+        range 4000 4200
+        help
+            The charger's status pin is not wired to the S3 on ORGA v1 (TBD-015),
+            so "charged" is inferred from voltage while power is good.
+
+    config HS_POWER_RELEASE_WAIT_MS
+        int "Wait at most this long for the power button's release (ms)"
+        default 10000
+        range 0 60000
+        help
+            The power button also holds the regulator on, so power cannot drop
+            until it is released.
+
+    config HS_POWER_AUTO_OFF_MIN
+        int "Power off after this long not worn, on battery (min); 0 = never"
+        default 15
+        range 0 600
+        help
+            "Not worn" is the IMU reporting stillness (modules/hs_sense). With
+            external power the headset never switches itself off.
+
+endmenu

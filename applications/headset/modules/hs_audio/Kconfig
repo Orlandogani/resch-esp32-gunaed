@@ -1,0 +1,34 @@
+menu "Headset: audio path (modules/hs_audio)"
+
+    config HS_AUDIO_CODEC_RATE_HZ
+        int "Codec sample rate (Hz)"
+        default 48000
+        help
+            The rate the codec is clocked for at boot (ADC and DAC alike on the
+            AIC3104). Every profile's speaker rate must equal it; the boom
+            microphone is decimated from it to the profile's mic rate.
+
+    config HS_AUDIO_MIN_ATTEN_HALF_DB
+        int "Hearing-safety cap: minimum DAC attenuation (0.5 dB steps)"
+        default 6
+        range 0 127
+        help
+            The host's volume is applied to the codec but never louder than this
+            much attenuation below full scale (6 = -3 dB). Set it from a
+            measurement of the real drivers at full scale (TBD-018): headphone
+            output level depends on driver sensitivity and impedance.
+
+    config HS_AUDIO_INITIAL_ATTEN_HALF_DB
+        int "Volume at boot, before the host sets one (0.5 dB steps of attenuation)"
+        default 24
+        range 0 127
+
+    config HS_AUDIO_BOOM_GAIN_HALF_DB
+        int "Boom microphone PGA gain (0.5 dB steps)"
+        default 40
+        range 0 119
+        help
+            40 = +20 dB for an electret on 2.5 V MICBIAS through 2.2 k. Tune on
+            the first board with the boom actually used.
+
+endmenu

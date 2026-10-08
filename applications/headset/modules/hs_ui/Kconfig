@@ -1,0 +1,26 @@
+menu "Headset: user interface (modules/hs_ui)"
+
+    config HS_UI_POWER_OFF_HOLD_MS
+        int "Hold the power switch this long to power off (ms)"
+        default 2500
+        range 1000 10000
+        help
+            Long enough not to happen by accident in a pocket; the LED fades
+            red when it fires. A shorter press shows the battery level.
+
+    config HS_UI_WHEEL_MAX_STEPS
+        int "Most volume steps one wheel event may produce"
+        default 4
+        range 1 32
+        help
+            A fast flick arrives as one event with several detents; capping it
+            keeps a flick from jumping the host volume to silence or full.
+
+    config HS_UI_WHEEL_REVERSE
+        bool "Reverse the thumbwheel's sense"
+        default n
+        help
+            Until the mechanical design fixes which way is "up" (the encoder is
+            a placeholder part on ORGA v1).
+
+endmenu
