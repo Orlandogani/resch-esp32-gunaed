@@ -1,0 +1,41 @@
+menu "Rotary encoder (drivers/encoder)"
+
+    config ENCODER_COUNTS_PER_DETENT
+        int "Default edges per detent (x4 decoding)"
+        default 4
+        range 1 64
+        help
+            4 when one click is one full quadrature cycle, which is the common
+            case (Bourns PEC09: 24 pulses, 24 detents). 2 for half-cycle-per-
+            detent parts; 1 for a detent-less wheel counted edge by edge.
+
+    config ENCODER_GLITCH_NS
+        int "Default glitch filter (ns)"
+        default 10000
+        range 0 12700
+        help
+            PCNT ignores pulses shorter than this. The hardware limit is 1023
+            APB cycles (12.7 us at 80 MHz). Mechanical bounce outlasts this, so
+            the filter is a first line only; the detent arithmetic is the second.
+
+    config ENCODER_TASK_PRIORITY
+        int "Encoder task priority"
+        default 8
+        range 1 24
+        help
+            Human-timescale work, like drivers/buttons: below every SDK deadline
+            task.
+
+    config ENCODER_TASK_CORE
+        int "Encoder task core affinity"
+        default 0
+        range 0 1
+
+    config ENCODER_TASK_STACK
+        int "Encoder task stack (bytes)"
+        default 3072
+        range 2048 16384
+        help
+            The application callback runs on this stack.
+
+endmenu
