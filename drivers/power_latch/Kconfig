@@ -1,0 +1,14 @@
+menu "Power latch (drivers/power_latch)"
+
+    config POWER_LATCH_RELEASE_TIMEOUT_MS
+        int "Default time power_latch_release() waits for power to collapse (ms)"
+        default 2000
+        range 100 30000
+        help
+            After dropping the hold pin, how long to wait before concluding that
+            power is still present - because the user is still holding the power
+            button, or the board has no latch at all - and re-asserting the pin.
+            A working latch collapses the rail in milliseconds; this only bounds
+            the failure case (FW-LAT-005).
+
+endmenu
