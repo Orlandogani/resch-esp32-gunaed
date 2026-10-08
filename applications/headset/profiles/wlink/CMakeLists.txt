@@ -7,8 +7,7 @@
 idf_component_register(SRCS "wlink.c"
                        INCLUDE_DIRS "include"
                        REQUIRES headset_profile
-                       PRIV_REQUIRES audio_link audio_capture audio_playback
-                                     headset_link_proto esp_timer)
+                       PRIV_REQUIRES audio_link hs_audio headset_link_proto esp_timer)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../../../../cmake/sdk_component.cmake)
 sdk_component_strict()

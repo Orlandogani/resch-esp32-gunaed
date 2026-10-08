@@ -6,8 +6,7 @@
 idf_component_register(SRCS "usound.c"
                        INCLUDE_DIRS "include"
                        REQUIRES headset_profile
-                       PRIV_REQUIRES audio_capture audio_playback
-                                     usb_device usb_audio usb_hid)
+                       PRIV_REQUIRES hs_audio usb_device usb_audio usb_hid)
 
 # Product code is held to the same flag set as the SDK. Nothing here is more
 # forgiving than subsys/ just because it is a profile.

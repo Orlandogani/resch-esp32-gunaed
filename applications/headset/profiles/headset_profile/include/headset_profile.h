@@ -8,6 +8,9 @@
  * hand-off behind one vtable is what lets Phase 2 add `bt_music` as a new profile
  * rather than a redesign, and what lets each profile be tested on its own.
  *
+ * Controls arrive as `headset_ctrl_t`, not as switch indices: the board decides what
+ * hardware produces them (ADR-025).
+ *
  * This component is deliberately header-only and deliberately *not* in `subsys/`:
  * it is product policy, not reusable SDK mechanism (ADR-013).
  */
@@ -17,7 +20,6 @@
 #include <stdint.h>
 
 #include "esp_err.h"
-#include "buttons.h"
 #include "pm_policy.h"
 #include "ringbuf.h"
 
@@ -52,6 +54,44 @@ typedef struct {
 } headset_profile_resources_t;
 
 /**
+ * @brief A user control, already resolved from whatever the board has — buttons, the
+ *        thumbwheel encoder — by `main/` (`modules/hs_ui`). A profile never sees a switch
+ *        index or a GPIO, so the same profile runs on every board (ADR-025).
+ */
+typedef enum {
+    HEADSET_CTRL_VOL_UP = 0,
+    HEADSET_CTRL_VOL_DOWN,
+    HEADSET_CTRL_PLAY_PAUSE,
+    HEADSET_CTRL_MIC_MUTE,
+} headset_ctrl_t;
+
+/** Something the headset learned about itself that the far end may want to know. */
+typedef enum {
+    HEADSET_STATUS_BATTERY = 0,   /**< `battery` is valid.                                */
+    HEADSET_STATUS_WEAR,          /**< `worn` is valid.                                   */
+    HEADSET_STATUS_HEAD_POSE,     /**< `pose` is valid. Only to profiles with
+                                       HEADSET_PROFILE_CAP_HEAD_POSE, while worn.         */
+} headset_status_kind_t;
+
+typedef struct {
+    headset_status_kind_t kind;
+    union {
+        struct {
+            uint8_t percent;
+            bool    ext_power;    /**< Charger input present.                             */
+            bool    charging;     /**< ext_power and not yet full (inferred, TBD-015).    */
+        } battery;
+        bool worn;
+        struct {
+            float w, x, y, z;     /**< Unit quaternion, game rotation (no magnetometer).  */
+        } pose;
+    };
+} headset_status_t;
+
+/** Capabilities a profile declares; `main/` only does the work a profile can use. */
+#define HEADSET_PROFILE_CAP_HEAD_POSE (1u << 0)
+
+/**
  * @brief A profile: one way of moving audio between the user and the far end.
  *
  * Every function is called from the `main/` mode task, never from an ISR, and never
@@ -78,14 +118,26 @@ typedef struct {
     esp_err_t (*stop)(void *ctx);
 
     /**
-     * @brief A button event, already debounced by `drivers/buttons`.
+     * @brief A user control (one step: a held volume key or a fast wheel arrives as
+     *        several calls).
      *
-     * The profile translates it into whatever its far end understands — for
-     * `usound` a USB HID consumer-control report. Optional; NULL means the
-     * profile ignores controls. `main/` consumes the long-press override before
-     * this is called, so a profile never sees it.
+     * The profile translates it into whatever its far end understands — for `usound`
+     * a USB HID consumer-control report, for `wlink` a CONTROL message to the dongle.
+     * Optional; NULL means the profile ignores controls. `main/` consumes the mode and
+     * power controls first, so a profile never sees them. Called on the main task.
      */
-    void (*on_button)(buttons_event_t evt, const buttons_event_info_t *info, void *ctx);
+    void (*on_control)(headset_ctrl_t ctrl, void *ctx);
+
+    /**
+     * @brief Battery, wear and head-pose updates for the far end. Optional.
+     *
+     * Battery and wear arrive on the main task; head pose arrives on the IMU task at the
+     * sensor's rate and must not block. Only called between `start()` and `stop()`.
+     */
+    void (*on_status)(const headset_status_t *st, void *ctx);
+
+    /** HEADSET_PROFILE_CAP_* bits. */
+    uint32_t caps;
 
     /**
      * @brief Is the far end actually carrying audio right now?
@@ -94,6 +146,13 @@ typedef struct {
      * goes false. Optional; NULL means "assume live until stopped".
      */
     bool (*is_live)(void *ctx);
+
+    /**
+     * @brief Is the far end actually there — the dongle linked, the host enumerated —
+     *        as opposed to merely waiting for it? Drives the status LED only. Optional;
+     *        NULL means "same as is_live".
+     */
+    bool (*is_connected)(void *ctx);
 
     /** Passed back to every callback above. */
     void *ctx;

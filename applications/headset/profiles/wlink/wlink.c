@@ -2,13 +2,15 @@
  * Phase 2 profile: wireless headset, peripheral end of subsys/audio_link.
  *
  * Bring-up order, and why:
- *   audio_playback_init  - the sink must exist before the link can fill its ring
- *   audio_capture_init   - independent; failure is tolerated (no mic -> speaker only)
+ *   hs_audio_open        - the sink (and codec) must exist before the link can fill its
+ *                          ring; the microphone is optional (no mic -> speaker only)
  *   audio_link_init      - decoder writes main/'s playback ring (single writer);
- *                          encoder reads the capture ring through its own cursor
- *   audio_playback_start - running before the first frame is decoded
- *   audio_capture_start
+ *                          encoder reads the mic ring through its own cursor
+ *   hs_audio_start       - running before the first frame is decoded
  *   audio_link_start     - BLE up and advertising; the dongle connects when it can
+ *
+ * Besides audio the profile carries the headset's status to the dongle: battery, wear
+ * and head pose (headset_link_proto, ADR-025 integration).
  *
  * The profile stays live while the link is up, and for CONFIG_WLINK_RECONNECT_GRACE_S
  * after it drops: a dongle that comes back quickly finds the headset still
@@ -20,24 +22,21 @@
 #include "esp_timer.h"
 #include "sdkconfig.h"
 
-#include "audio_capture.h"
 #include "audio_link.h"
-#include "audio_playback.h"
 #include "headset_link_proto.h"
+#include "hs_audio.h"
 #include "wlink.h"
 
 static const char *TAG = "wlink";
 
-/* Button indices, matching the pins array main/ passes to buttons_init(). */
-#define WLINK_BTN_VOL_DOWN  0
-#define WLINK_BTN_VOL_UP    1
-#define WLINK_BTN_ACTION    2
-
 static struct {
     headset_profile_resources_t res;
     bool    started;
-    bool    playback_up;
+    bool    audio_up;
     bool    capture_up;
+    uint8_t battery_msg[HLP_BATTERY_LEN];   /* last battery report, re-sent on link-up */
+    bool    battery_known;
+    int64_t pose_next_us;                   /* head-pose rate limit                    */
     bool    link_init;
     bool    link_started;
     int64_t live_until_us;     /* is_live() stays true until then while the link is down. */
@@ -51,20 +50,17 @@ static void log_stats(void *arg)
 {
     (void)arg;
     audio_link_stats_t l;
-    audio_playback_stats_t p;
-    if (audio_link_stats(&l) != ESP_OK || audio_playback_stats(&p) != ESP_OK) {
+    if (audio_link_stats(&l) != ESP_OK) {
         return;
     }
     ESP_LOGI(TAG, "LINK %s rx %lu lost %lu late %lu conceal %lu resync %lu | tx %lu busy %lu | "
-                  "dec %lu/%lu us enc %lu/%lu us stack %lu | PLAY backlog %lu B underruns %lu "
-                  "starv %lu prefills %lu",
+                  "dec %lu/%lu us enc %lu/%lu us stack %lu | PLAY backlog %lu B",
              l.up ? "UP" : "down", (unsigned long)l.rx_frames, (unsigned long)l.rx_lost,
              (unsigned long)l.rx_late, (unsigned long)l.rx_concealed, (unsigned long)l.rx_resyncs,
              (unsigned long)l.tx_frames, (unsigned long)l.tx_busy,
              (unsigned long)l.decode_us_avg, (unsigned long)l.decode_us_max,
              (unsigned long)l.encode_us_avg, (unsigned long)l.encode_us_max,
-             (unsigned long)l.task_stack_free_min, (unsigned long)p.source_backlog_bytes,
-             (unsigned long)p.underruns, (unsigned long)p.starvations, (unsigned long)p.prefills);
+             (unsigned long)l.task_stack_free_min, (unsigned long)hs_audio_playback_backlog());
 }
 #endif
 
@@ -77,8 +73,15 @@ static void log_stats(void *arg)
 static uint32_t playback_backlog(void *ctx)
 {
     (void)ctx;
-    audio_playback_stats_t st;
-    return (audio_playback_stats(&st) == ESP_OK) ? st.source_backlog_bytes : 0;
+    return hs_audio_playback_backlog();
+}
+
+static void send_msg(const uint8_t *msg, size_t len)
+{
+    esp_err_t err = audio_link_send_control(msg, len);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGD(TAG, "control 0x%02x not sent: %s", msg[0], esp_err_to_name(err));
+    }
 }
 
 static void on_link_event(audio_link_event_t evt, void *ctx)
@@ -88,12 +91,15 @@ static void on_link_event(audio_link_event_t evt, void *ctx)
     case AUDIO_LINK_EVT_UP:
         ESP_LOGI(TAG, "dongle linked");
         s_w.live_until_us = INT64_MAX;
+        if (s_w.battery_known) {
+            send_msg(s_w.battery_msg, sizeof(s_w.battery_msg));
+        }
         break;
     case AUDIO_LINK_EVT_DOWN:
         ESP_LOGI(TAG, "dongle lost; advertising for %d s", CONFIG_WLINK_RECONNECT_GRACE_S);
         s_w.live_until_us = esp_timer_get_time() + (int64_t)CONFIG_WLINK_RECONNECT_GRACE_S * 1000000;
         /* Drop the stale tail rather than play it after the gap (DES-APB-007). */
-        (void)audio_playback_flush();
+        hs_audio_flush();
         break;
     case AUDIO_LINK_EVT_FORMAT_MISMATCH:
         ESP_LOGE(TAG, "dongle sends a different audio format; check WLINK_* against DONGLE_*");
@@ -110,34 +116,76 @@ static void on_control(const uint8_t *msg, size_t len, void *ctx)
         int16_t vol = (int16_t)(msg[3] | (msg[4] << 8));
         ESP_LOGI(TAG, "host %s: mute=%u volume=%d.%02u dB", msg[1] ? "mic" : "speaker", msg[2],
                  vol / 256, (unsigned)((vol & 0xFF) * 100 / 256));
+        if (msg[1] == 0) {
+            (void)hs_audio_set_host_volume(msg[2] != 0, vol);   /* codec DAC, capped */
+        }
     }
 }
 
 static void send_button(uint8_t bits)
 {
     const uint8_t msg[HLP_BUTTON_LEN] = { HLP_MSG_BUTTON, bits };
-    esp_err_t err = audio_link_send_control(msg, sizeof(msg));
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "button not sent: %s", esp_err_to_name(err));
+    send_msg(msg, sizeof(msg));
+}
+
+/* One control step; the dongle sends the HID release itself. */
+static void wlink_on_control(headset_ctrl_t ctrl, void *ctx)
+{
+    (void)ctx;
+    switch (ctrl) {
+    case HEADSET_CTRL_VOL_DOWN:   send_button(HLP_HID_VOL_DOWN); break;
+    case HEADSET_CTRL_VOL_UP:     send_button(HLP_HID_VOL_UP);   break;
+    case HEADSET_CTRL_PLAY_PAUSE: send_button(HLP_HID_PLAY);     break;
+    case HEADSET_CTRL_MIC_MUTE:   send_button(HLP_HID_MUTE);     break;
+    default:                      break;
     }
 }
 
-static void wlink_on_button(buttons_event_t evt, const buttons_event_info_t *info, void *ctx)
+static int16_t q14(float v)
+{
+    float s = v * 16384.0f;
+    if (s > 32767.0f) {
+        s = 32767.0f;
+    } else if (s < -32768.0f) {
+        s = -32768.0f;
+    }
+    return (int16_t)s;
+}
+
+/* Battery and wear on the main task; head pose on the IMU task at the sensor rate,
+ * thinned to CONFIG_WLINK_POSE_MAX_HZ so the link's CONTROL budget is not the IMU's. */
+static void wlink_on_status(const headset_status_t *st, void *ctx)
 {
     (void)ctx;
-    /* Same semantics as usound: PRESSED and REPEAT act (volume ramps while held),
-     * RELEASED does not — the dongle sends the HID release itself. */
-    if (evt != BUTTONS_EVENT_PRESSED && evt != BUTTONS_EVENT_REPEAT) {
-        return;
-    }
-    switch (info->index) {
-    case WLINK_BTN_VOL_DOWN: send_button(HLP_HID_VOL_DOWN); break;
-    case WLINK_BTN_VOL_UP:   send_button(HLP_HID_VOL_UP);   break;
-    case WLINK_BTN_ACTION:
-        if (evt == BUTTONS_EVENT_PRESSED) {
-            send_button(HLP_HID_PLAY);
-        }
+    switch (st->kind) {
+    case HEADSET_STATUS_BATTERY:
+        s_w.battery_msg[0] = HLP_MSG_BATTERY;
+        s_w.battery_msg[1] = st->battery.percent;
+        s_w.battery_msg[2] = (uint8_t)((st->battery.ext_power ? HLP_BATTERY_EXT_POWER : 0u) |
+                                       (st->battery.charging ? HLP_BATTERY_CHARGING : 0u));
+        s_w.battery_known = true;
+        send_msg(s_w.battery_msg, sizeof(s_w.battery_msg));
         break;
+    case HEADSET_STATUS_WEAR: {
+        const uint8_t msg[HLP_WEAR_LEN] = { HLP_MSG_WEAR, st->worn ? 1u : 0u };
+        send_msg(msg, sizeof(msg));
+        break;
+    }
+    case HEADSET_STATUS_HEAD_POSE: {
+        int64_t now = esp_timer_get_time();
+        if (now < s_w.pose_next_us || !audio_link_is_up()) {
+            break;
+        }
+        s_w.pose_next_us = now + 1000000 / CONFIG_WLINK_POSE_MAX_HZ;
+        int16_t c[4] = { q14(st->pose.w), q14(st->pose.x), q14(st->pose.y), q14(st->pose.z) };
+        uint8_t msg[HLP_HEAD_POSE_LEN] = { HLP_MSG_HEAD_POSE };
+        for (int i = 0; i < 4; i++) {
+            msg[1 + 2 * i] = (uint8_t)((uint16_t)c[i] & 0xFFu);
+            msg[2 + 2 * i] = (uint8_t)((uint16_t)c[i] >> 8);
+        }
+        send_msg(msg, sizeof(msg));
+        break;
+    }
     default:
         break;
     }
@@ -147,6 +195,12 @@ static bool wlink_is_live(void *ctx)
 {
     (void)ctx;
     return s_w.link_started && (audio_link_is_up() || esp_timer_get_time() < s_w.live_until_us);
+}
+
+static bool wlink_is_connected(void *ctx)
+{
+    (void)ctx;
+    return s_w.link_started && audio_link_is_up();
 }
 
 /* -------------------------------------------------------------------------- */
@@ -167,50 +221,26 @@ static esp_err_t wlink_start(const headset_profile_resources_t *res, void *ctx)
     memset(&s_w, 0, sizeof(s_w));
     s_w.res = *res;
 
-    /* --- Speaker ---------------------------------------------------------- */
-    const audio_playback_config_t pb = {
-        .source          = res->playback_ring,
-        .sample_rate_hz  = CONFIG_WLINK_SPEAKER_SAMPLE_RATE_HZ,
-        .channels        = CONFIG_WLINK_SPEAKER_CHANNELS,
-        .bits_per_sample = 16,
-        .slot            = AUDIO_PLAYBACK_SLOT_BOTH,
-        .port            = -1,
-        .pins = { .bclk = CONFIG_HEADSET_SPK_PIN_BCLK,
-                  .ws   = CONFIG_HEADSET_SPK_PIN_WS,
-                  .dout = CONFIG_HEADSET_SPK_PIN_DOUT,
-                  .mclk = CONFIG_HEADSET_SPK_PIN_MCLK },
+    /* --- Audio: speaker (and codec), optional microphone --------------- */
+    const hs_audio_config_t ac = {
+        .playback_ring = res->playback_ring,
+        .spk_rate_hz   = CONFIG_WLINK_SPEAKER_SAMPLE_RATE_HZ,
+        .spk_channels  = CONFIG_WLINK_SPEAKER_CHANNELS,
+        .mic_rate_hz   = CONFIG_WLINK_MIC_SAMPLE_RATE_HZ,
     };
-    esp_err_t err = audio_playback_init(&pb);
+    esp_err_t err = hs_audio_open(&ac);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "audio_playback_init: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "hs_audio_open: %s", esp_err_to_name(err));
         goto fail;
     }
-    s_w.playback_up = true;
-
-    /* --- Microphone: optional ---------------------------------------------- */
-    const audio_capture_config_t cap = {
-        .interface       = CONFIG_HEADSET_MIC_PDM ? AUDIO_CAPTURE_IF_PDM : AUDIO_CAPTURE_IF_I2S_STD,
-        .sample_rate_hz  = CONFIG_WLINK_MIC_SAMPLE_RATE_HZ,
-        .channels        = 1,
-        .bits_per_sample = 16,
-        .slot            = AUDIO_CAPTURE_SLOT_LEFT,
-        .pins = { .clk  = CONFIG_HEADSET_MIC_PIN_CLK,
-                  .ws   = CONFIG_HEADSET_MIC_PIN_WS,
-                  .din  = CONFIG_HEADSET_MIC_PIN_DIN,
-                  .mclk = -1 },
-    };
-    err = audio_capture_init(&cap);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "no microphone (%s); continuing speaker-only", esp_err_to_name(err));
-    } else {
-        s_w.capture_up = true;
-    }
+    s_w.audio_up = true;
+    s_w.capture_up = (hs_audio_mic_ring() != NULL);
 
     /* --- The link ----------------------------------------------------------- */
     const audio_link_config_t lc = {
         .role = AUDIO_LINK_ROLE_PERIPHERAL,
         .transport = AUDIO_LINK_TRANSPORT_BLE,
-        .tx = { .ring = s_w.capture_up ? audio_capture_get_ring() : NULL,
+        .tx = { .ring = hs_audio_mic_ring(),
                 .sample_rate_hz = CONFIG_WLINK_MIC_SAMPLE_RATE_HZ, .channels = 1 },
         .rx = { .ring = res->playback_ring,
                 .sample_rate_hz = CONFIG_WLINK_SPEAKER_SAMPLE_RATE_HZ,
@@ -228,13 +258,10 @@ static esp_err_t wlink_start(const headset_profile_resources_t *res, void *ctx)
     s_w.link_init = true;
 
     /* --- Go live ------------------------------------------------------------ */
-    err = audio_playback_start();
+    err = hs_audio_start();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "audio_playback_start: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "hs_audio_start: %s", esp_err_to_name(err));
         goto fail;
-    }
-    if (s_w.capture_up && (err = audio_capture_start()) != ESP_OK) {
-        ESP_LOGW(TAG, "audio_capture_start: %s; speaker-only", esp_err_to_name(err));
     }
     err = audio_link_start();
     if (err != ESP_OK) {
@@ -289,16 +316,10 @@ static esp_err_t wlink_stop(void *ctx)
         s_w.link_init = false;
         s_w.link_started = false;
     }
-    if (s_w.capture_up) {
-        (void)audio_capture_stop();
-        (void)audio_capture_deinit();
+    if (s_w.audio_up) {
+        (void)hs_audio_close();
+        s_w.audio_up = false;
         s_w.capture_up = false;
-    }
-    if (s_w.playback_up) {
-        (void)audio_playback_stop();
-        (void)audio_playback_flush();
-        (void)audio_playback_deinit();
-        s_w.playback_up = false;
     }
     s_w.started = false;
     return ESP_OK;
@@ -312,8 +333,11 @@ const headset_profile_t *wlink_profile(void)
         .name      = "wlink",
         .start     = wlink_start,
         .stop      = wlink_stop,
-        .on_button = wlink_on_button,
+        .on_control = wlink_on_control,
+        .on_status  = wlink_on_status,
+        .caps       = HEADSET_PROFILE_CAP_HEAD_POSE,
         .is_live   = wlink_is_live,
+        .is_connected = wlink_is_connected,
         .ctx       = NULL,
     };
     return &profile;

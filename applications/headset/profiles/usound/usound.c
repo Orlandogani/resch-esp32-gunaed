@@ -8,21 +8,23 @@
  * borrowed for the lifetime of a start()/stop() pair.
  *
  * Bring-up order, and why:
- *   audio_playback_init  - needs the ring before anything can fill it
- *   audio_capture_init   - independent; failure is tolerated (no mic -> speaker only)
+ *   hs_audio_open        - playback (and codec) needs the ring before anything can fill
+ *                          it; the microphone is optional (no mic -> speaker only)
  *   usb_device_init      - must precede any class function registration
  *   usb_audio_init       - registers the duplex UAC2 function (ADR-021)
  *   usb_hid_init         - registers the consumer-control function
  *   usb_device_start     - descriptors are frozen from here on
- *   audio_playback_start - after USB, so the first host packets meet a running sink
+ *   hs_audio_start       - after USB, so the first host packets meet a running sink
+ *
+ * The board's audio path — which DAC or codec, which microphone, the boom jack — is
+ * modules/hs_audio's business (ADR-025); this profile only moves bytes to and from USB.
  */
 #include <string.h>
 
 #include "esp_log.h"
 #include "sdkconfig.h"
 
-#include "audio_capture.h"
-#include "audio_playback.h"
+#include "hs_audio.h"
 #include "usb_audio.h"
 #include "usb_device.h"
 #include "usb_hid.h"
@@ -65,11 +67,6 @@ static const uint8_t s_hid_report_desc[] = {
 #define USOUND_HID_MUTE      (1u << 2)
 #define USOUND_HID_PLAY      (1u << 3)
 
-/* Button indices, matching the pins array main/ passes to buttons_init(). */
-#define USOUND_BTN_VOL_DOWN  0
-#define USOUND_BTN_VOL_UP    1
-#define USOUND_BTN_ACTION    2
-
 /* -------------------------------------------------------------------------- */
 /* State                                                                        */
 /* -------------------------------------------------------------------------- */
@@ -77,8 +74,8 @@ static const uint8_t s_hid_report_desc[] = {
 static struct {
     headset_profile_resources_t res;
     bool started;          /* start() completed; stop() has work to do        */
-    bool playback_up;      /* audio_playback_init() succeeded                 */
-    bool capture_up;       /* audio_capture_init() succeeded                  */
+    bool audio_up;         /* hs_audio_open() succeeded                       */
+    bool capture_up;       /* a microphone came up with it                    */
     bool usb_up;           /* usb_device_init() succeeded                     */
     bool usb_running;      /* usb_device_start() succeeded                    */
 } s_usound;
@@ -93,20 +90,22 @@ static struct {
 static uint32_t playback_backlog(void *ctx)
 {
     (void)ctx;
-    audio_playback_stats_t st;
-    return (audio_playback_stats(&st) == ESP_OK) ? st.source_backlog_bytes : 0;
+    return hs_audio_playback_backlog();
 }
 
-/* Host moved its own volume or mute on one direction's feature unit. The SDK
- * applies neither (ADR-013). audio_playback renders the bytes it is given, so if
- * this ever has to attenuate, it attenuates on the way into the ring - never here,
- * and never in the driver. */
+/* Host moved its own volume or mute on one direction's feature unit. The SDK applies
+ * neither (ADR-013); this profile hands the speaker's to hs_audio, which sets the codec's
+ * DAC where the board has one (with the hearing-safety cap) and declines otherwise, in
+ * which case the host's own attenuation is all there is — as before. */
 static void on_usb_control(usb_audio_stream_t which, bool mute, int16_t volume_db256, void *ctx)
 {
     (void)ctx;
     ESP_LOGI(TAG, "host %s control: mute=%d volume=%d.%02u dB",
              which == USB_AUDIO_STREAM_SPEAKER ? "speaker" : "mic",
              (int)mute, volume_db256 / 256, (unsigned)((volume_db256 & 0xFF) * 100 / 256));
+    if (which == USB_AUDIO_STREAM_SPEAKER) {
+        (void)hs_audio_set_host_volume(mute, volume_db256);
+    }
 }
 
 static void on_usb_event(usb_device_event_t evt, void *ctx)
@@ -129,28 +128,18 @@ static void hid_tap(uint8_t bits)
     (void)usb_hid_report_send(0, &report, sizeof(report));
 }
 
-static void usound_on_button(buttons_event_t evt, const buttons_event_info_t *info, void *ctx)
+/* One control step: a volume key press or repeat, a wheel detent, a play/pause press.
+ * main/ has already resolved the board's inputs (ADR-025), so there is nothing to
+ * debounce or ramp here. */
+static void usound_on_control(headset_ctrl_t ctrl, void *ctx)
 {
     (void)ctx;
-
-    /* REPEAT is how volume ramps while a button is held; drivers/buttons only
-     * emits it when auto_repeat is configured. PRESSED and REPEAT both act;
-     * RELEASED does not, because hid_tap() already sent the release. */
-    if (evt != BUTTONS_EVENT_PRESSED && evt != BUTTONS_EVENT_REPEAT) {
-        return;
-    }
-
-    switch (info->index) {
-    case USOUND_BTN_VOL_DOWN: hid_tap(USOUND_HID_VOL_DOWN); break;
-    case USOUND_BTN_VOL_UP:   hid_tap(USOUND_HID_VOL_UP);   break;
-    case USOUND_BTN_ACTION:
-        /* Only on the initial press: auto-repeating play/pause is nonsense. */
-        if (evt == BUTTONS_EVENT_PRESSED) {
-            hid_tap(USOUND_HID_PLAY);
-        }
-        break;
-    default:
-        break;
+    switch (ctrl) {
+    case HEADSET_CTRL_VOL_DOWN:   hid_tap(USOUND_HID_VOL_DOWN); break;
+    case HEADSET_CTRL_VOL_UP:     hid_tap(USOUND_HID_VOL_UP);   break;
+    case HEADSET_CTRL_PLAY_PAUSE: hid_tap(USOUND_HID_PLAY);     break;
+    case HEADSET_CTRL_MIC_MUTE:   hid_tap(USOUND_HID_MUTE);     break;
+    default:                      break;
     }
 }
 
@@ -184,48 +173,20 @@ static esp_err_t usound_start(const headset_profile_resources_t *res, void *ctx)
 
     esp_err_t err;
 
-    /* --- Speaker path ---------------------------------------------------- */
-    const audio_playback_config_t pb = {
-        .source          = res->playback_ring,
-        .sample_rate_hz  = CONFIG_USOUND_SPEAKER_SAMPLE_RATE_HZ,
-        .channels        = CONFIG_USOUND_SPEAKER_CHANNELS,
-        .bits_per_sample = 16,
-        .slot            = AUDIO_PLAYBACK_SLOT_BOTH,
-        .port            = -1,
-        .pins = { .bclk = CONFIG_HEADSET_SPK_PIN_BCLK,
-                  .ws   = CONFIG_HEADSET_SPK_PIN_WS,
-                  .dout = CONFIG_HEADSET_SPK_PIN_DOUT,
-                  .mclk = CONFIG_HEADSET_SPK_PIN_MCLK },
+    /* --- Audio: speaker (and codec), optional microphone --------------- */
+    const hs_audio_config_t ac = {
+        .playback_ring = res->playback_ring,
+        .spk_rate_hz   = CONFIG_USOUND_SPEAKER_SAMPLE_RATE_HZ,
+        .spk_channels  = CONFIG_USOUND_SPEAKER_CHANNELS,
+        .mic_rate_hz   = CONFIG_USOUND_MIC_SAMPLE_RATE_HZ,
     };
-    err = audio_playback_init(&pb);
+    err = hs_audio_open(&ac);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "audio_playback_init: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "hs_audio_open: %s", esp_err_to_name(err));
         goto fail;  /* Without a sink there is no headset. */
     }
-    s_usound.playback_up = true;
-
-    /* --- Microphone path: optional --------------------------------------- */
-    if (res->mic_ring != NULL) {
-        const audio_capture_config_t cap = {
-            .interface       = CONFIG_HEADSET_MIC_PDM ? AUDIO_CAPTURE_IF_PDM
-                                                     : AUDIO_CAPTURE_IF_I2S_STD,
-            .sample_rate_hz  = CONFIG_USOUND_MIC_SAMPLE_RATE_HZ,
-            .channels        = 1,
-            .bits_per_sample = 16,
-            .slot            = AUDIO_CAPTURE_SLOT_LEFT,
-            .pins = { .clk  = CONFIG_HEADSET_MIC_PIN_CLK,
-                      .ws   = CONFIG_HEADSET_MIC_PIN_WS,
-                      .din  = CONFIG_HEADSET_MIC_PIN_DIN,
-                      .mclk = -1 },
-        };
-        err = audio_capture_init(&cap);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "no microphone (%s); continuing speaker-only",
-                     esp_err_to_name(err));
-        } else {
-            s_usound.capture_up = true;
-        }
-    }
+    s_usound.audio_up = true;
+    s_usound.capture_up = (hs_audio_mic_ring() != NULL);
 
     /* --- USB: descriptors are frozen once usb_device_start() runs --------- */
     err = usb_device_init(NULL);
@@ -250,7 +211,7 @@ static esp_err_t usound_start(const headset_profile_resources_t *res, void *ctx)
     };
     if (s_usound.capture_up) {
         uac.mic = (usb_audio_stream_config_t){
-            .ring            = audio_capture_get_ring(),
+            .ring            = hs_audio_mic_ring(),
             .sample_rate_hz  = CONFIG_USOUND_MIC_SAMPLE_RATE_HZ,
             .channels        = 1,
             .bits_per_sample = 16,
@@ -282,13 +243,10 @@ static esp_err_t usound_start(const headset_profile_resources_t *res, void *ctx)
     s_usound.usb_running = true;
 
     /* --- Go live --------------------------------------------------------- */
-    err = audio_playback_start();
+    err = hs_audio_start();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "audio_playback_start: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "hs_audio_start: %s", esp_err_to_name(err));
         goto fail;
-    }
-    if (s_usound.capture_up && (err = audio_capture_start()) != ESP_OK) {
-        ESP_LOGW(TAG, "audio_capture_start: %s; speaker-only", esp_err_to_name(err));
     }
 
     /* Last, so a failure above never leaves sleep blocked. */
@@ -329,18 +287,12 @@ static esp_err_t usound_stop(void *ctx)
         (void)usb_device_deinit();  /* Unregisters the class functions with it. */
         s_usound.usb_up = false;
     }
-    if (s_usound.capture_up) {
-        (void)audio_capture_stop();
-        (void)audio_capture_deinit();
-        s_usound.capture_up = false;
-    }
-    if (s_usound.playback_up) {
-        (void)audio_playback_stop();
-        /* Drop whatever the host queued but never rendered, so the next profile
+    if (s_usound.audio_up) {
+        /* Also drops whatever the host queued but never rendered, so the next profile
          * does not open with this one's tail (DES-APB-007). */
-        (void)audio_playback_flush();
-        (void)audio_playback_deinit();
-        s_usound.playback_up = false;
+        (void)hs_audio_close();
+        s_usound.audio_up = false;
+        s_usound.capture_up = false;
     }
 
     s_usound.started = false;
@@ -355,7 +307,9 @@ const headset_profile_t *usound_profile(void)
         .name      = "usound",
         .start     = usound_start,
         .stop      = usound_stop,
-        .on_button = usound_on_button,
+        .on_control = usound_on_control,
+        .on_status  = NULL,      /* no host surface for battery or pose yet (TBD-014) */
+        .caps       = 0,
         .is_live   = usound_is_live,
         .ctx       = NULL,
     };

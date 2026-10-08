@@ -47,6 +47,14 @@ menu "Profile: wlink (wireless link to the dongle)"
             One console line per period with the link's and the playback driver's
             counters — the headset half of a two-board soak (scripts/link_soak.py).
 
+    config WLINK_POSE_MAX_HZ
+        int "Send head pose to the dongle at most this often (Hz)"
+        default 30
+        range 1 120
+        help
+            Head-pose CONTROL messages share the link with audio. The IMU may run
+            faster (CONFIG_LSM6DSV16X_POSE_RATE_HZ); the surplus is dropped here.
+
     config WLINK_RECONNECT_GRACE_S
         int "Keep advertising after the dongle is lost for (s)"
         default 20

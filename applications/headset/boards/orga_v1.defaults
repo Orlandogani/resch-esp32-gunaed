@@ -1,0 +1,12 @@
+# Headset on ORGA v1: product settings that depend on the board (Zephyr's
+# boards/<board>.conf; applied after sdkconfig.defaults and boards/orga_v1/sdkconfig.defaults
+# by cmake/board.cmake).
+#
+# Build:  idf.py -C applications/headset -B build_orga -D BOARD=orga_v1 build
+# (writes sdkconfig.orga_v1). NEVER flash this image to the devkit: it starts TinyUSB,
+# which severs the devkit's only host link (CLAUDE.md hard rule 1), and drives GPIO21/10.
+
+# Wired mode is the product's main mode, and ORGA's console is on the UART0 pads, which
+# TinyUSB does not touch (closes TBD-009 for this board).
+CONFIG_HEADSET_ENABLE_USB=y
+CONFIG_HEADSET_ENABLE_WIRELESS=y

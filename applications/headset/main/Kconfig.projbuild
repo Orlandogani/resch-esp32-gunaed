@@ -24,7 +24,8 @@ menu "Application (headset)"
             safe to flash remotely. Needs CONFIG_BT_ENABLED.
 
             With both profiles compiled, USB wins at boot and a long press of the
-            action button switches between them.
+            action button switches between them. On a board with a battery, USB
+            "available" means the charger reports external power.
 
     config HEADSET_WIRELESS_RETRY_S
         int "Re-enter WIRELESS from IDLE after (s)"
@@ -37,74 +38,8 @@ menu "Application (headset)"
             stream lock so the device may sleep. It advertises again after this
             long, or at once on a press of the action button.
 
-    menu "Button pins"
-
-        config HEADSET_BTN_PIN_VOL_DOWN
-            int "Volume down"
-            default 10
-
-        config HEADSET_BTN_PIN_VOL_UP
-            int "Volume up"
-            default 11
-
-        config HEADSET_BTN_PIN_ACTION
-            int "Play/pause, and long-press mode override"
-            default 0
-            help
-                Defaults to GPIO 0, the BOOT button, because it is the one control
-                physically present on an S3 devkit and so the only one that can be
-                exercised before the enclosure exists. It is RTC-capable, so it also
-                serves as the deep-sleep wake source. The other two are placeholders.
-
-    endmenu
-
-    menu "Speaker (I2S TX) pins"
-
-        config HEADSET_SPK_PIN_BCLK
-            int "I2S BCLK"
-            default 15
-
-        config HEADSET_SPK_PIN_WS
-            int "I2S WS / LRCLK"
-            default 16
-
-        config HEADSET_SPK_PIN_DOUT
-            int "I2S DOUT"
-            default 17
-
-        config HEADSET_SPK_PIN_MCLK
-            int "I2S MCLK (-1 if the DAC needs none)"
-            default -1
-            help
-                Board wiring, shared by every profile that plays audio. Which DAC or
-                amplifier part this is remains open (TBD-010), so these four pins
-                are placeholders chosen not to collide with the microphone pins in
-                applications/gunshot-aed. Set them for the real board before
-                trusting a playback measurement.
-
-    endmenu
-
-    menu "Microphone (I2S RX) pins"
-
-        config HEADSET_MIC_PDM
-            bool "Microphone is PDM (else standard I2S)"
-            default y
-
-        config HEADSET_MIC_PIN_CLK
-            int "PDM CLK or I2S BCLK"
-            default 4
-
-        config HEADSET_MIC_PIN_WS
-            int "I2S WS (ignored for PDM)"
-            default 5
-
-        config HEADSET_MIC_PIN_DIN
-            int "Data in"
-            default 6
-            help
-                Same defaults as applications/gunshot-aed, and equally provisional:
-                the microphone part is TBD-002. Shared by every profile.
-
-    endmenu
+    # Pins are no longer here: they belong to the board (ADR-025). The devkit's old
+    # HEADSET_*_PIN_* settings are BOARD_DEVKIT_* in boards/esp32s3_devkitc/board/Kconfig;
+    # ORGA v1's are fixed by its copper in boards/orga_v1/board/board.c.
 
 endmenu
