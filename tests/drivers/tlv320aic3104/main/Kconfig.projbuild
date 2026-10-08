@@ -1,0 +1,9 @@
+menu "Test: tlv320aic3104"
+
+    config TEST_ON_ORGA
+        bool "Running on an ORGA v1 board (codec present)"
+        default n
+        help
+            Runs the [needs_orga] cases, which need the real codec, and skips the
+            [no_codec] case, which asserts that nothing answers at 0x18.
+endmenu

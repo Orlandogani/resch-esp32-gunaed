@@ -1,0 +1,51 @@
+menu "TLV320AIC3104 codec (drivers/tlv320aic3104)"
+
+    config TLV320AIC3104_I2C_HZ
+        int "Default I2C clock (Hz)"
+        default 400000
+        range 10000 400000
+        help
+            The codec supports standard and fast mode (SLAS510G).
+
+    config TLV320AIC3104_HP_CM
+        int "Headphone output common-mode voltage code"
+        default 1
+        range 0 3
+        help
+            Register 40 D7-D6: 0 = 1.35 V, 1 = 1.5 V, 2 = 1.65 V, 3 = 1.8 V.
+            Half the driver supply gives the most swing: 1.5 V for DRVDD = 3.0 V
+            (ORGA v1, LP5907-3.0). Choose 1.65 V for a 3.3 V DRVDD.
+
+    config TLV320AIC3104_POWER_ON_DELAY_CODE
+        int "Output driver power-on delay code (pop reduction)"
+        default 6
+        range 0 11
+        help
+            Register 42 D7-D4: 0 = 0 s, 1 = 10 us, 2 = 100 us, 3 = 1 ms,
+            4 = 10 ms, 5 = 50 ms, 6 = 100 ms, 7 = 200 ms, 8 = 400 ms,
+            9 = 800 ms, 10 = 2 s, 11 = 4 s. Longer is quieter at power-up.
+
+    config TLV320AIC3104_POWER_UP_TIMEOUT_MS
+        int "How long start() waits for the drivers to report powered (ms)"
+        default 1000
+        range 100 10000
+        help
+            Must exceed the power-on delay above plus the ramp.
+
+    config TLV320AIC3104_DEFAULT_ATTEN_HALF_DB
+        int "Initial DAC attenuation (0.5 dB steps)"
+        default 24
+        range 0 127
+        help
+            24 = -12 dB: a conservative starting volume until the application
+            sets its own. The application owns any hearing-safety cap.
+
+    config TLV320AIC3104_DEFAULT_MIC_GAIN_HALF_DB
+        int "Initial microphone PGA gain (0.5 dB steps)"
+        default 40
+        range 0 119
+        help
+            40 = +20 dB, a typical starting point for an electret boom mic
+            biased at 2.5 V.
+
+endmenu
