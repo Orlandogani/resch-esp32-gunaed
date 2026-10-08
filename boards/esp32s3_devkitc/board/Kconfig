@@ -1,0 +1,45 @@
+menu "Board: esp32s3_devkitc"
+
+    # Provisional wiring for development on an ESP32-S3-DevKitC-1. These moved here from
+    # applications/headset/main/Kconfig.projbuild (HEADSET_*_PIN_*) with their defaults
+    # unchanged, when board definitions became top-level components (ADR-025).
+
+    config BOARD_DEVKIT_BTN_VOL_DOWN
+        int "Volume-down button GPIO"
+        default 10
+    config BOARD_DEVKIT_BTN_VOL_UP
+        int "Volume-up button GPIO"
+        default 11
+    config BOARD_DEVKIT_BTN_ACTION
+        int "Action button GPIO (BOOT)"
+        default 0
+
+    config BOARD_DEVKIT_SPK_BCLK
+        int "Speaker I2S BCLK"
+        default 15
+    config BOARD_DEVKIT_SPK_WS
+        int "Speaker I2S WS"
+        default 16
+    config BOARD_DEVKIT_SPK_DOUT
+        int "Speaker I2S DOUT"
+        default 17
+    config BOARD_DEVKIT_SPK_MCLK
+        int "Speaker I2S MCLK (-1 if the DAC needs none)"
+        default -1
+        help
+            The DAC or amplifier on a devkit is whatever is wired up (TBD-010).
+
+    config BOARD_DEVKIT_MIC_PDM
+        bool "Microphone is PDM (else standard I2S)"
+        default y
+    config BOARD_DEVKIT_MIC_CLK
+        int "Microphone PDM CLK or I2S BCLK"
+        default 4
+    config BOARD_DEVKIT_MIC_WS
+        int "Microphone I2S WS (ignored for PDM)"
+        default 5
+    config BOARD_DEVKIT_MIC_DIN
+        int "Microphone data in"
+        default 6
+
+endmenu

@@ -1,0 +1,9 @@
+# Board: esp32s3_devkitc (ADR-025). Board-level configuration only; product settings
+# stay in the application's sdkconfig.defaults.
+#
+# ESP32-S3-DevKitC-1 N16R8: 16 MiB flash, 8 MiB octal PSRAM. The only host link is the
+# USB-Serial/JTAG (CLAUDE.md hard rule 1), so it carries the console as the secondary
+# output; UART0 stays primary for a USB-UART adapter on the header.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
