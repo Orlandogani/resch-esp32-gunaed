@@ -39,7 +39,15 @@ static void on_control(const uint8_t *msg, size_t len, void *ctx)
     (void)ctx;
     if (len >= HLP_BUTTON_LEN && msg[0] == HLP_MSG_BUTTON) {
         s_c.res.hid_tap(msg[1]);
+    } else if (len >= HLP_BATTERY_LEN && msg[0] == HLP_MSG_BATTERY) {
+        /* No host surface for it yet (TBD-014): log it so a soak sees the headset drain. */
+        ESP_LOGI(TAG, "headset battery %u%%%s%s", msg[1],
+                 (msg[2] & HLP_BATTERY_EXT_POWER) ? ", external power" : "",
+                 (msg[2] & HLP_BATTERY_CHARGING) ? ", charging" : "");
+    } else if (len >= HLP_WEAR_LEN && msg[0] == HLP_MSG_WEAR) {
+        ESP_LOGI(TAG, "headset %s", msg[1] ? "worn" : "off head");
     }
+    /* HLP_MSG_HEAD_POSE and unknown types are ignored (TBD-014). */
 }
 
 static esp_err_t central_start(const dongle_backend_resources_t *res, void *ctx)
